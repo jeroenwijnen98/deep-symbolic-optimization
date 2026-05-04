@@ -3,6 +3,7 @@ import pandas as pd
 
 from dso.task import HierarchicalTask
 from dso.library import Library, Polynomial
+from dso import functions as dso_functions
 from dso.functions import create_tokens
 from dso.task.regression.dataset import BenchmarkDataset
 from dso.task.regression.polyfit import PolyOptimizer, make_poly_data
@@ -22,7 +23,8 @@ class RegressionTask(HierarchicalTask):
                  reward_noise_type="r", threshold=1e-12,
                  normalize_variance=False, protected=False,
                  decision_tree_threshold_set=None,
-                 poly_optimizer_params=None):
+                 poly_optimizer_params=None,
+                 indicator_approx_steepness=None):
         """
         Parameters
         ----------
@@ -157,6 +159,10 @@ class RegressionTask(HierarchicalTask):
         else:
             self.rng = None
             self.scale = None
+
+        # Apply indicator_approx steepness override before tokens are created
+        if indicator_approx_steepness is not None:
+            dso_functions.INDICATOR_APPROX_STEEPNESS = indicator_approx_steepness
 
         # Set the Library
         tokens = create_tokens(n_input_var=self.X_train.shape[1],

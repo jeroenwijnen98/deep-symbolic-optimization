@@ -8,6 +8,10 @@ import dso.utils as U
 
 GAMMA = 0.57721566490153286060651209008240243104215933593992
 
+# Steepness for indicator_approx; larger = sharper transition. Overwritten from
+# RegressionTask config (key: indicator_approx_steepness).
+INDICATOR_APPROX_STEEPNESS = 1.0
+
 
 """Define custom unprotected operators"""
 def logabs(x1):
@@ -31,6 +35,10 @@ def harmonic(x1):
         return np.array([sum(Fraction(1, d) for d in range(1, int(val)+1)) for val in x1], dtype=np.float32)
     else:
         return GAMMA + np.log(x1) + 0.5/x1 - 1./(12*x1**2) + 1./(120*x1**4)
+
+def indicator_approx(x1, x2):
+    """Smooth approximation of 1[x1 > x2]. Larger INDICATOR_APPROX_STEEPNESS = sharper."""
+    return 1 / (1 + np.exp(-(x1 - x2) * INDICATOR_APPROX_STEEPNESS))
 
 
 # Annotate unprotected ops
@@ -62,7 +70,8 @@ unprotected_ops = [
     Token(n3, "n3", arity=1, complexity=3),
     Token(n4, "n4", arity=1, complexity=3),
     Token(sigmoid, "sigmoid", arity=1, complexity=4),
-    Token(harmonic, "harmonic", arity=1, complexity=4)
+    Token(harmonic, "harmonic", arity=1, complexity=4),
+    Token(indicator_approx, "indicator_approx", arity=2, complexity=4)
 ]
 
 
@@ -108,6 +117,10 @@ def protected_n4(x1):
 def protected_sigmoid(x1):
     return 1 / (1 + protected_expneg(x1))
 
+def protected_indicator_approx(x1, x2):
+    """Smooth approximation of 1[x1 > x2]. Larger INDICATOR_APPROX_STEEPNESS = sharper."""
+    return 1 / (1 + protected_expneg((x1 - x2) * INDICATOR_APPROX_STEEPNESS))
+
 # Annotate protected ops
 protected_ops = [
     # Protected binary operators
@@ -123,7 +136,8 @@ protected_ops = [
     Token(protected_n2, "n2", arity=1, complexity=2),
     Token(protected_n3, "n3", arity=1, complexity=3),
     Token(protected_n4, "n4", arity=1, complexity=3),
-    Token(protected_sigmoid, "sigmoid", arity=1, complexity=4)
+    Token(protected_sigmoid, "sigmoid", arity=1, complexity=4),
+    Token(protected_indicator_approx, "indicator_approx", arity=2, complexity=4)
 ]
 
 # Add unprotected ops to function map
