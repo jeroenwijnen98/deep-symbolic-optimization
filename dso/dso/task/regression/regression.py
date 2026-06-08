@@ -21,6 +21,7 @@ class RegressionTask(HierarchicalTask):
                  metric_params=(1.0,), extra_metric_test=None,
                  extra_metric_test_params=(), reward_noise=0.0,
                  reward_noise_type="r", threshold=1e-12,
+                 early_stop_metric="nmse", early_stop_metric_params=(),
                  normalize_variance=False, protected=False,
                  decision_tree_threshold_set=None,
                  poly_optimizer_params=None,
@@ -58,7 +59,23 @@ class RegressionTask(HierarchicalTask):
             "r" : N(0, reward_noise) is added to r.
 
         threshold : float
-            Threshold of NMSE on noiseless data used to determine success.
+            Maximum distance from the early-stop metric's optimum (max_reward)
+            allowed for a candidate to count as a success (early stopping).
+            Must be non-negative. Success is the symmetric band
+            abs(metric_value - max_reward) <= threshold. For the default "nmse"
+            (optimum 0, always >= 0) this reduces to NMSE <= threshold.
+
+        early_stop_metric : str
+            Name of the metric used to determine success for early stopping.
+            "nmse" (default) thresholds NMSE on the noiseless test data. Any
+            metric supported by make_regression_metric (e.g. "neg_mswl",
+            "neg_mse", "inv_nrmse", "pearson") may be used instead; success is
+            judged as a two-sided band around that metric's own optimum
+            (max_reward), so the metric's sign/range does not matter.
+
+        early_stop_metric_params : list
+            List of metric-specific parameters for early_stop_metric. Ignored
+            when early_stop_metric == "nmse".
 
         normalize_variance : bool
             If True and reward_noise_type=="r", reward is multiplied by
@@ -133,8 +150,23 @@ class RegressionTask(HierarchicalTask):
         """
         Configure train/test reward metrics.
         """
+        assert threshold >= 0, (
+            "threshold must be non-negative; it is the maximum distance from "
+            "the metric's optimum (max_reward) allowed for a success.")
         self.threshold = threshold
         self.metric, self.invalid_reward, self.max_reward = make_regression_metric(metric, self.y_train, *metric_params)
+
+        # Configure the metric used to determine early-stopping success. Success
+        # is a symmetric band around the metric's optimum (max_reward), so any
+        # metric works regardless of sign/range. "nmse" (default) uses inline
+        # NMSE on the noiseless test data, whose optimum is 0.
+        self.early_stop_metric = early_stop_metric
+        if early_stop_metric == "nmse":
+            self.early_stop_metric_fn = None
+            self.early_stop_max = 0.0
+        else:
+            self.early_stop_metric_fn, _, self.early_stop_max = make_regression_metric(
+                early_stop_metric, self.y_test_noiseless, *early_stop_metric_params)
         self.extra_metric_test = extra_metric_test
         if extra_metric_test is not None:
             self.metric_test, _, _ = make_regression_metric(extra_metric_test, self.y_test, *extra_metric_test_params)
@@ -251,8 +283,15 @@ class RegressionTask(HierarchicalTask):
             # NMSE on noiseless test data (used to determine recovery)
             nmse_test_noiseless = np.mean((self.y_test_noiseless - y_hat) ** 2) / self.var_y_test_noiseless
 
-            # Success is defined by NMSE on noiseless test data below a threshold
-            success = nmse_test_noiseless < self.threshold
+            # Success = candidate within `threshold` of the early-stop metric's
+            # optimum (max_reward) on noiseless test data, in either direction.
+            # Default "nmse" has optimum 0 and is always >= 0, so this reduces
+            # to NMSE <= threshold.
+            if self.early_stop_metric_fn is None:
+                metric_value = nmse_test_noiseless
+            else:
+                metric_value = self.early_stop_metric_fn(self.y_test_noiseless, y_hat)
+            success = abs(metric_value - self.early_stop_max) <= self.threshold
 
         info = {
             "nmse_test" : nmse_test,
@@ -369,7 +408,13 @@ def make_regression_metric(name, y_train, *args):
         # Spearman correlation coefficient
         # Range: [0, 1]
         "spearman" :    (lambda y, y_hat : scipy.stats.spearmanr(y, y_hat)[0],
-                        0)
+                        0),
+
+        # Negative mean Square welfare loss
+        # Range: [-inf, 0]
+        "neg_mswl": (lambda y, y_hat : -np.mean(np.minimum(0, y_hat-y)**2),
+                    0),
+
     }
 
     assert name in all_metrics, "Unrecognized reward function name."
@@ -390,7 +435,8 @@ def make_regression_metric(name, y_train, *args):
         "inv_nrmse" : 0.0, #1/(1 + args[0]),
         "fraction" : 0.0,
         "pearson" : 0.0,
-        "spearman" : 0.0
+        "spearman" : 0.0,
+        "neg_mswl": -var_y
     }
     invalid_reward = all_invalid_rewards[name]
 
@@ -405,7 +451,8 @@ def make_regression_metric(name, y_train, *args):
         "inv_nrmse" : 1.0,
         "fraction" : 1.0,
         "pearson" : 1.0,
-        "spearman" : 1.0
+        "spearman" : 1.0,
+        "neg_mswl": 0.0
     }
     max_reward = all_max_rewards[name]
 
