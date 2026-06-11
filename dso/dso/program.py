@@ -245,6 +245,8 @@ class Program(object):
             self.is_input_var = array.array('i', [t.input_var is not None for t in self.traversal])
 
         self.invalid = False
+        self.budget_status = None
+        self.budget_violation = None
         self.str = tokens.tostring()
         self.tokens = tokens
 
@@ -299,7 +301,7 @@ class Program(object):
 
         # Do the optimization
         x0 = np.ones(len(self.const_pos)) # Initial guess
-        optimized_constants = Program.const_optimizer(f, x0)
+        optimized_constants = Program.const_optimizer(f, x0, program=self)
 
         # Set the optimized constants
         self.set_constants(optimized_constants)
@@ -473,6 +475,44 @@ class Program(object):
             return self.task.evaluate(self)
 
     @cached_property
+    def budget_shortfall(self):
+        """Aggregate revenue under-collection on the training set.
+
+        budget_shortfall = sum(target) - sum(pred)
+            > 0  the proposed formula collects LESS than the target (deficit)
+            < 0  it collects more (surplus)
+        This is the quantity bounded by budget_slack in the Gurobi inner
+        optimizer, evaluated here on the data the formula was fit/constrained
+        on.  Returns None for invalid programs.
+        """
+        # Constants must be optimized before measuring.
+        if "r" not in self.__dict__:
+            self.optimize()
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            y_hat = self.execute(self.task.X_train)
+        if self.invalid:
+            return None
+        return float(np.sum(self.task.y_train) - np.sum(y_hat))
+
+    @cached_property
+    def budget_shortfall_pct(self):
+        """budget_shortfall as a percentage of total target revenue.
+
+        budget_shortfall_pct = 100 * (sum(target) - sum(pred)) / sum(target)
+            > 0  deficit (under-collects), as a percent of target revenue
+            < 0  surplus
+        Returns None for invalid programs or if total target revenue is 0.
+        """
+        bs = self.budget_shortfall
+        if bs is None:
+            return None
+        total_target = float(np.sum(self.task.y_train))
+        if total_target == 0:
+            return None
+        return 100.0 * bs / total_target
+
+    @cached_property
     def sympy_expr(self):
         """
         Returns the attribute self.sympy_expr.
@@ -490,6 +530,24 @@ class Program(object):
             expr = tree.__repr__()
         return expr
 
+    def __getstate__(self):
+        """Exclude unpicklable cached attributes when pickling a Program.
+
+        The cached ``sympy_expr`` can hold SymPy objects for custom operators
+        (e.g. ``indicator_approx``) whose dynamically-created function classes
+        report ``__module__ == '__main__'`` and therefore cannot be pickled.
+        This breaks sending Programs to/from worker processes when
+        ``n_cores_batch > 1`` (parallel reward eval and Hall-of-Fame saving).
+        ``sympy_expr`` is a derived, display-only value, so we drop it from the
+        pickled state; it is recomputed lazily on next access.
+        """
+        state = self.__dict__.copy()
+        state.pop("sympy_expr", None)
+        return state
+
+    def __setstate__(self, state):
+        self.__dict__.update(state)
+
     def pretty(self):
         """Returns pretty printed string of the program"""
 
@@ -505,6 +563,8 @@ class Program(object):
         """
 
         print("\tReward: {}".format(self.r))
+        print("\tBudget shortfall: {}".format(self.budget_shortfall))
+        print("\tBudget shortfall %: {}".format(self.budget_shortfall_pct))
         print("\tCount Off-policy: {}".format(self.off_policy_count))
         print("\tCount On-policy: {}".format(self.on_policy_count))
         print("\tOriginally on Policy: {}".format(self.originally_on_policy))

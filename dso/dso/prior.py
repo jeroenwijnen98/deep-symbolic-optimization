@@ -32,6 +32,7 @@ def make_prior(library, config_prior):
         "trig" : TrigConstraint,
         "const" : ConstConstraint,
         "no_inputs" : NoInputsConstraint,
+        "require_const" : RequireConstConstraint,
         "soft_length" : SoftLengthPrior,
         "uniform_arity" : UniformArityPrior,
         "domain_range" : DomainRangeConstraint,
@@ -627,6 +628,44 @@ class NoInputsConstraint(Constraint):
 
     def describe(self):
         message = "{}: Sequences contain at least one input variable Token.".format(self.__class__.__name__)
+        return message
+
+
+class RequireConstConstraint(Constraint):
+    """Class that constrains sequences to contain at least one 'const' Token.
+
+    Mirror of NoInputsConstraint: whenever the expression is about to close
+    (dangling == 1) and no const has been sampled yet, every terminal Token
+    except 'const' is forbidden, forcing the final terminal to be a const."""
+
+    def __init__(self, library):
+        Prior.__init__(self, library)
+        if self.library.const_token is not None:
+            # Terminals that are NOT const; these get forbidden at the closing step
+            self.non_const_terminals = np.array(
+                [t for t in self.library.terminal_tokens
+                 if t != self.library.const_token],
+                dtype=np.int32)
+
+    def validate(self):
+        if self.library.const_token is None:
+            return "'const' is not in the Library, so this prior has no effect."
+        return None
+
+    def __call__(self, actions, parent, sibling, dangling):
+        # Constrain when:
+        # 1) choosing a terminal now would end the expression (dangling == 1) and
+        # 2) no const Token has been sampled yet
+        mask = (dangling == 1) & \
+               (np.sum(actions == self.library.const_token, axis=1) == 0)
+        prior = self.make_constraint(mask, self.non_const_terminals)
+        return prior
+
+    def is_violated(self, actions, parent, sibling):
+        return bool(np.sum(actions == self.library.const_token) == 0)
+
+    def describe(self):
+        message = "{}: Sequences contain at least one const Token.".format(self.__class__.__name__)
         return message
 
 

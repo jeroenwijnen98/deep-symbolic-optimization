@@ -341,6 +341,35 @@ class Trainer():
         s_full = s
         actions_full = actions
         invalid_full = invalid
+
+        # Exclude programs with budget_status == "unknown" from the policy update.
+        # These programs yielded no feasibility information (elastic solve also
+        # produced no incumbent) and their reward of 0.0 would incorrectly bias
+        # the policy gradient.
+        exclude = np.array(
+            [getattr(p, "budget_status", None) == "unknown" for p in programs],
+            dtype=bool,
+        )
+        if exclude.any():
+            keep_known = ~exclude
+            if not keep_known.any():
+                # All programs in this batch are unknown: skip the policy step.
+                print("WARNING: All programs in batch have budget_status='unknown'; "
+                      "skipping policy update for this iteration.")
+                self.iteration += 1
+                return
+            r = r[keep_known]
+            l = l[keep_known]
+            s = list(compress(s, keep_known))
+            invalid = invalid[keep_known]
+            programs = list(compress(programs, keep_known))
+            actions = actions[keep_known, :]
+            obs = obs[keep_known, :, :]
+            priors = priors[keep_known, :, :]
+            on_policy = on_policy[keep_known]
+
+        # Computed after the unknown-exclusion filter so that r_best and
+        # p_r_best are always derived from the same (known-feasibility) batch.
         r_max = np.max(r)
 
         """

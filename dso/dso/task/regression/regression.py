@@ -25,7 +25,9 @@ class RegressionTask(HierarchicalTask):
                  normalize_variance=False, protected=False,
                  decision_tree_threshold_set=None,
                  poly_optimizer_params=None,
-                 indicator_approx_steepness=None):
+                 indicator_approx_steepness=None,
+                 feasibility_first=False, violation_tau_pct=1.0,
+                 budget_slack=0.0):
         """
         Parameters
         ----------
@@ -206,6 +208,18 @@ class RegressionTask(HierarchicalTask):
         # Set stochastic flag
         self.stochastic = reward_noise > 0.0
 
+        # Feasibility-first reward shaping (Deb's rules).
+        self.feasibility_first = feasibility_first
+        self.budget_slack = budget_slack
+        if feasibility_first:
+            assert self.max_reward == 1.0 and self.invalid_reward == 0.0, (
+                "feasibility_first requires a [0,1]-bounded metric such as inv_nrmswl "
+                f"(got max_reward={self.max_reward}, invalid_reward={self.invalid_reward})")
+            tau = (violation_tau_pct / 100.0) * abs(float(np.sum(self.y_train)))
+            self.violation_tau = tau if tau != 0.0 else 1.0
+        else:
+            self.violation_tau = None
+
         # Set neg_nrmse as the metric for const optimization
         self.const_opt_metric, _, _ = make_regression_metric("neg_nrmse", self.y_train)
 
@@ -220,6 +234,30 @@ class RegressionTask(HierarchicalTask):
                     }
 
             self.poly_optimizer = PolyOptimizer(**poly_optimizer_params)
+
+    def _budget_feasibility(self, p, y_hat):
+        """Return (status, v) for a program given its predictions.
+
+        status : "feasible" | "infeasible" | "unknown"
+        v      : float >= 0 (violation in currency units) for "infeasible",
+                 0.0 for "feasible", None for "unknown"
+
+        Uses p.budget_status when the const optimizer has already set it.
+        Falls back to computing feasibility directly from y_hat when
+        budget_status is None (e.g. const-free programs).
+        """
+        status = getattr(p, "budget_status", None)
+        if status is not None:
+            v = getattr(p, "budget_violation", None)
+            return status, v
+
+        # Const optimizer never ran (no constants in program); compute directly.
+        shortfall = float(np.sum(self.y_train) - np.sum(y_hat))
+        v = max(0.0, shortfall - self.budget_slack)
+        tol = 1e-9 * max(1.0, abs(float(np.sum(self.y_train))))
+        if v <= tol:
+            return "feasible", 0.0
+        return "infeasible", v
 
     def reward_function(self, p, optimizing=False):
         # fit a polynomial if p contains a 'poly' token
@@ -250,6 +288,29 @@ class RegressionTask(HierarchicalTask):
         # Compute and return neg_nrmse for constant optimization
         if optimizing:
             return self.const_opt_metric(self.y_train, y_hat)
+
+        # Feasibility-first reward shaping (Deb's rules).
+        # Applied only on the non-optimizing path when enabled.
+        if not optimizing and self.feasibility_first:
+            status, v = self._budget_feasibility(p, y_hat)
+            if status == "unknown":
+                return 0.0
+            elif status == "infeasible":
+                return 0.5 / (1.0 + v / self.violation_tau)
+            else:  # "feasible"
+                # Compute the base metric (r in [0, 1]) and transform.
+                r = self.metric(self.y_train, y_hat)
+                # Apply reward noise before transformation if applicable.
+                if self.reward_noise and self.reward_noise_type == "r":
+                    if r >= self.max_reward - 1e-5 and p.evaluate.get("success"):
+                        # Return the shaped maximum (not np.inf) so confirmed
+                        # successes can't be masked by noise while the feasible
+                        # reward stays bounded in [0.5, 1.0].
+                        return 1.0
+                    r += self.rng.normal(loc=0, scale=self.scale)
+                    if self.normalize_variance:
+                        r /= np.sqrt(1 + 12 * self.scale ** 2)
+                return 0.5 + 0.5 * r
 
         # Compute metric
         r = self.metric(self.y_train, y_hat)
@@ -293,10 +354,20 @@ class RegressionTask(HierarchicalTask):
                 metric_value = self.early_stop_metric_fn(self.y_test_noiseless, y_hat)
             success = abs(metric_value - self.early_stop_max) <= self.threshold
 
+            # Feasibility-first: require budget feasibility for success.
+            if self.feasibility_first and success:
+                y_hat_train = p.execute(self.X_train)
+                budget_status, _ = self._budget_feasibility(p, y_hat_train)
+                if budget_status != "feasible":
+                    success = False
+
         info = {
             "nmse_test" : nmse_test,
             "nmse_test_noiseless" : nmse_test_noiseless,
-            "success" : success
+            "success" : success,
+            "budget_shortfall" : p.budget_shortfall,
+            "budget_shortfall_pct" : p.budget_shortfall_pct,
+            "budget_status" : getattr(p, "budget_status", None),
         }
 
         if self.metric_test is not None:
@@ -412,9 +483,14 @@ def make_regression_metric(name, y_train, *args):
 
         # Negative mean Square welfare loss
         # Range: [-inf, 0]
-        "neg_mswl": (lambda y, y_hat : -np.mean(np.minimum(0, y_hat-y)**2),
+        "neg_mswl": (lambda y, y_hat : -np.mean(np.maximum(0, y_hat-y)**2),
                     0),
 
+        # Inverse normalized root mean square welfare loss
+        # Range: (0, 1]; 1 = perfect fit (zero welfare loss)
+        # Value = 1/(1 + sqrt(mean(max(0, y_hat-y)^2) / var(y))) for general y_hat
+        "inv_nrmswl": (lambda y, y_hat : 1.0 / (1.0 + np.sqrt(np.mean(np.maximum(0, y_hat - y) ** 2) / var_y)),
+                      0),
     }
 
     assert name in all_metrics, "Unrecognized reward function name."
@@ -436,7 +512,8 @@ def make_regression_metric(name, y_train, *args):
         "fraction" : 0.0,
         "pearson" : 0.0,
         "spearman" : 0.0,
-        "neg_mswl": -var_y
+        "neg_mswl": -var_y,
+        "inv_nrmswl": 0.0,
     }
     invalid_reward = all_invalid_rewards[name]
 
@@ -452,7 +529,8 @@ def make_regression_metric(name, y_train, *args):
         "fraction" : 1.0,
         "pearson" : 1.0,
         "spearman" : 1.0,
-        "neg_mswl": 0.0
+        "neg_mswl": 0.0,
+        "inv_nrmswl": 1.0,
     }
     max_reward = all_max_rewards[name]
 
