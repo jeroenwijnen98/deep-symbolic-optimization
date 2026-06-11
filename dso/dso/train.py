@@ -7,6 +7,7 @@ from itertools import compress
 
 import tensorflow as tf
 import numpy as np
+from tqdm import tqdm
 
 from dso.program import Program, from_tokens
 from dso.utils import empirical_entropy, get_duration, weighted_quantile, pad_action_obs_priors
@@ -278,17 +279,42 @@ class Trainer():
             obs = np.append(obs, deap_obs, axis=0)
             priors = np.append(priors, deap_priors, axis=0)
 
+        # Const optimization happens lazily when a program's reward (p.r) is
+        # first accessed, which calls Program.optimize().  Count the programs
+        # that still need it so we can show a progress bar and total time.
+        n_to_optimize = sum(1 for p in programs if "r" not in p.__dict__)
+        const_opt_start = time.time()
+
         # Compute rewards in parallel
         if self.pool is not None:
             # Filter programs that need reward computing
             programs_to_optimize = list(set([p for p in programs if "r" not in p.__dict__]))
-            pool_p_dict = { p.str : p for p in self.pool.map(work, programs_to_optimize) }
+            # Use imap_unordered so the progress bar advances as each worker
+            # actually finishes (results are collected into a dict keyed by
+            # p.str, so completion order does not matter for correctness).
+            pool_p_dict = { p.str : p for p in tqdm(
+                self.pool.imap_unordered(work, programs_to_optimize),
+                total=len(programs_to_optimize),
+                desc="Const optimization", unit="prog", leave=False) }
             programs = [pool_p_dict[p.str] if "r" not in p.__dict__  else p for p in programs]
             # Make sure to update cache with new programs
             Program.cache.update(pool_p_dict)
 
-        # Compute rewards (or retrieve cached rewards)
-        r = np.array([p.r for p in programs])
+            # Compute rewards (or retrieve cached rewards)
+            r = np.array([p.r for p in programs])
+        else:
+            # Sequential path: the list comprehension below triggers the const
+            # optimization, so wrap it directly in the progress bar.
+            r = np.array([p.r for p in tqdm(
+                programs, total=len(programs),
+                desc="Const optimization", unit="prog", leave=False)])
+
+        # Report total const-optimization wall time for this iteration
+        const_opt_elapsed = time.time() - const_opt_start
+        if n_to_optimize > 0:
+            print("Const optimization: {} programs in {:.3f}s ({:.1f} progs/s)".format(
+                n_to_optimize, const_opt_elapsed,
+                n_to_optimize / const_opt_elapsed if const_opt_elapsed > 0 else 0.0))
 
         # Back up programs to save them properly later
         controller_programs = programs.copy() if self.logger.save_token_count else None
