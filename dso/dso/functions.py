@@ -115,11 +115,21 @@ def protected_n4(x1):
         return np.where(np.abs(x1) < 1e6, np.power(x1, 4), 0.0)
 
 def protected_sigmoid(x1):
-    return 1 / (1 + protected_expneg(x1))
+    # Clip the result (not the inner exp): for x1 << 0 the true sigmoid -> 0 and
+    # for x1 >> 0 it -> 1. Clipping exp inside 1/(1+exp(-x1)) would flip the lower
+    # limit to 1, so saturate the output directly to keep both limits correct.
+    with np.errstate(over='ignore'):
+        return np.where(x1 < -100, 0.0,
+               np.where(x1 > 100, 1.0, 1 / (1 + np.exp(-x1))))
 
 def protected_indicator_approx(x1, x2):
     """Smooth approximation of 1[x1 > x2]. Larger INDICATOR_APPROX_STEEPNESS = sharper."""
-    return 1 / (1 + protected_expneg((x1 - x2) * INDICATOR_APPROX_STEEPNESS))
+    # See protected_sigmoid: clip the output to {0,1} in the saturated tails so the
+    # overflow tail (x1 << x2) returns 0, not 1.
+    t = (x1 - x2) * INDICATOR_APPROX_STEEPNESS
+    with np.errstate(over='ignore'):
+        return np.where(t < -100, 0.0,
+               np.where(t > 100, 1.0, 1 / (1 + np.exp(-t))))
 
 # Annotate protected ops
 protected_ops = [

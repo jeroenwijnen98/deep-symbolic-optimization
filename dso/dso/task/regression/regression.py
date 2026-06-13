@@ -20,8 +20,8 @@ class RegressionTask(HierarchicalTask):
     def __init__(self, function_set, dataset, metric="inv_nrmse",
                  metric_params=(1.0,), extra_metric_test=None,
                  extra_metric_test_params=(), reward_noise=0.0,
-                 reward_noise_type="r", threshold=1e-12,
-                 early_stop_metric="nmse", early_stop_metric_params=(),
+                 reward_noise_type="r", early_stop_threshold=1e-12,
+                 early_stop_metric=None, early_stop_metric_params=None,
                  normalize_variance=False, protected=False,
                  decision_tree_threshold_set=None,
                  poly_optimizer_params=None,
@@ -60,24 +60,26 @@ class RegressionTask(HierarchicalTask):
             "y_hat" : N(0, reward_noise * y_rms_train) is added to y_hat values.
             "r" : N(0, reward_noise) is added to r.
 
-        threshold : float
+        early_stop_threshold : float
             Maximum distance from the early-stop metric's optimum (max_reward)
             allowed for a candidate to count as a success (early stopping).
             Must be non-negative. Success is the symmetric band
-            abs(metric_value - max_reward) <= threshold. For the default "nmse"
-            (optimum 0, always >= 0) this reduces to NMSE <= threshold.
+            abs(metric_value - max_reward) <= early_stop_threshold. For "nmse"
+            (optimum 0, always >= 0) this reduces to NMSE <= early_stop_threshold.
 
         early_stop_metric : str
             Name of the metric used to determine success for early stopping.
-            "nmse" (default) thresholds NMSE on the noiseless test data. Any
-            metric supported by make_regression_metric (e.g. "neg_mswl",
-            "neg_mse", "inv_nrmse", "pearson") may be used instead; success is
-            judged as a two-sided band around that metric's own optimum
-            (max_reward), so the metric's sign/range does not matter.
+            If None (default), the training `metric` is reused. The special
+            value "nmse" thresholds NMSE on the noiseless test data. Any metric
+            supported by make_regression_metric (e.g. "neg_mswl", "neg_mse",
+            "inv_nrmse", "pearson") may be used instead; success is judged as a
+            two-sided band around that metric's own optimum (max_reward), so the
+            metric's sign/range does not matter.
 
         early_stop_metric_params : list
-            List of metric-specific parameters for early_stop_metric. Ignored
-            when early_stop_metric == "nmse".
+            List of metric-specific parameters for early_stop_metric. If None
+            (default) and early_stop_metric is also None, the training
+            `metric_params` are reused. Ignored when early_stop_metric == "nmse".
 
         normalize_variance : bool
             If True and reward_noise_type=="r", reward is multiplied by
@@ -152,16 +154,25 @@ class RegressionTask(HierarchicalTask):
         """
         Configure train/test reward metrics.
         """
-        assert threshold >= 0, (
-            "threshold must be non-negative; it is the maximum distance from "
-            "the metric's optimum (max_reward) allowed for a success.")
-        self.threshold = threshold
+        assert early_stop_threshold >= 0, (
+            "early_stop_threshold must be non-negative; it is the maximum "
+            "distance from the metric's optimum (max_reward) allowed for a "
+            "success.")
+        self.early_stop_threshold = early_stop_threshold
         self.metric, self.invalid_reward, self.max_reward = make_regression_metric(metric, self.y_train, *metric_params)
+
+        # If no early-stop metric is given, reuse the training metric and its params.
+        if early_stop_metric is None:
+            early_stop_metric = metric
+            if early_stop_metric_params is None:
+                early_stop_metric_params = metric_params
+        if early_stop_metric_params is None:
+            early_stop_metric_params = ()
 
         # Configure the metric used to determine early-stopping success. Success
         # is a symmetric band around the metric's optimum (max_reward), so any
-        # metric works regardless of sign/range. "nmse" (default) uses inline
-        # NMSE on the noiseless test data, whose optimum is 0.
+        # metric works regardless of sign/range. The special value "nmse" uses
+        # inline NMSE on the noiseless test data, whose optimum is 0.
         self.early_stop_metric = early_stop_metric
         if early_stop_metric == "nmse":
             self.early_stop_metric_fn = None
@@ -344,15 +355,15 @@ class RegressionTask(HierarchicalTask):
             # NMSE on noiseless test data (used to determine recovery)
             nmse_test_noiseless = np.mean((self.y_test_noiseless - y_hat) ** 2) / self.var_y_test_noiseless
 
-            # Success = candidate within `threshold` of the early-stop metric's
-            # optimum (max_reward) on noiseless test data, in either direction.
-            # Default "nmse" has optimum 0 and is always >= 0, so this reduces
-            # to NMSE <= threshold.
+            # Success = candidate within `early_stop_threshold` of the early-stop
+            # metric's optimum (max_reward) on noiseless test data, in either
+            # direction. "nmse" has optimum 0 and is always >= 0, so this reduces
+            # to NMSE <= early_stop_threshold.
             if self.early_stop_metric_fn is None:
                 metric_value = nmse_test_noiseless
             else:
                 metric_value = self.early_stop_metric_fn(self.y_test_noiseless, y_hat)
-            success = abs(metric_value - self.early_stop_max) <= self.threshold
+            success = abs(metric_value - self.early_stop_max) <= self.early_stop_threshold
 
             # Feasibility-first: require budget feasibility for success.
             if self.feasibility_first and success:
