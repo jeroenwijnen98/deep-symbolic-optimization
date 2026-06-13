@@ -342,6 +342,10 @@ class Trainer():
         actions_full = actions
         invalid_full = invalid
 
+        # Persist every expression generated this iteration (full batch)
+        if getattr(self.logger, "save_expressions", False):
+            self.logger.write_expressions_csv(self.iteration + 1, programs)
+
         # Exclude programs with budget_status == "unknown" from the policy update.
         # These programs yielded no feasibility information (elastic solve also
         # produced no incumbent) and their reward of 0.0 would incorrectly bias

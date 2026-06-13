@@ -6,6 +6,43 @@ import numpy as np
 from scipy.optimize import minimize
 
 
+def _map_gurobi_status(status_code):
+    """Map a gurobipy GRB.Status code to a unified status string."""
+    from gurobipy import GRB
+    # Build defensively: some constants (e.g. WORK_LIMIT, MEM_LIMIT) do not
+    # exist in Gurobi 9.1.2.  Use getattr with a sentinel so missing attrs are
+    # silently skipped rather than raising AttributeError.
+    _SENTINEL = object()
+    raw_mapping = {
+        "OPTIMAL": "optimal",
+        "INFEASIBLE": "infeasible",
+        "INF_OR_UNBD": "unbounded",
+        "UNBOUNDED": "unbounded",
+        "TIME_LIMIT": "limit_reached",
+        "ITERATION_LIMIT": "limit_reached",
+        "NODE_LIMIT": "limit_reached",
+        "SOLUTION_LIMIT": "limit_reached",
+        "WORK_LIMIT": "limit_reached",
+        "MEM_LIMIT": "limit_reached",
+        "NUMERIC": "numeric",
+        "SUBOPTIMAL": "numeric",
+        "INTERRUPTED": "interrupted",
+    }
+    mapping = {}
+    for attr_name, unified in raw_mapping.items():
+        code = getattr(GRB, attr_name, _SENTINEL)
+        if code is not _SENTINEL:
+            mapping[code] = unified
+    return mapping.get(status_code, "other")
+
+
+_SCIPY_STATUS_MAP = {0: "optimal", 1: "limit_reached", 2: "numeric"}
+
+
+def _map_scipy_status(status_code):
+    return _SCIPY_STATUS_MAP.get(status_code, "other")
+
+
 def make_const_optimizer(name, **kwargs):
     """Returns a ConstOptimizer given a name and keyword arguments"""
 
@@ -62,8 +99,13 @@ class Dummy(ConstOptimizer):
 
     
     def __call__(self, f, x0, program=None):
+        if program is not None:
+            program.hard_status = None
+            program.hard_has_solution = None
+            program.elastic_status = None
+            program.elastic_has_solution = None
         return x0
-        
+
 
 class ScipyMinimize(ConstOptimizer):
     """SciPy's non-linear optimizer"""
@@ -73,10 +115,22 @@ class ScipyMinimize(ConstOptimizer):
 
 
     def __call__(self, f, x0, program=None):
-        with np.errstate(divide='ignore'):
-            opt_result = partial(minimize, **self.kwargs)(f, x0)
-        x = opt_result['x']
-        return x
+        try:
+            with np.errstate(divide='ignore'):
+                opt_result = partial(minimize, **self.kwargs)(f, x0)
+            if program is not None:
+                program.hard_status = _map_scipy_status(opt_result.status)
+                program.hard_has_solution = True
+                program.elastic_status = None
+                program.elastic_has_solution = None
+            return opt_result['x']
+        except Exception:
+            if program is not None:
+                program.hard_status = "error"
+                program.hard_has_solution = False
+                program.elastic_status = None
+                program.elastic_has_solution = None
+            return x0
 
 
 class GurobiConstOptimizer(ConstOptimizer):
@@ -143,14 +197,24 @@ class GurobiConstOptimizer(ConstOptimizer):
             return ("infeasible", float(shortfall - budget_slack))
 
     def __call__(self, f, x0, program=None):
-        # Rule 1: no constants → return x0 without touching budget_status.
+        # Rule 1: no constants → stamp status and return x0.
         if program is None or len(program.const_pos) == 0:
+            if program is not None:
+                program.hard_status = "no_constants"
+                program.hard_has_solution = None
+                program.elastic_status = None
+                program.elastic_has_solution = None
             return x0
 
         try:
             # Lazy imports: keeps dso importable without Gurobi / the tax repo.
             from solvers.tax_model import TaxModel
             from solvers.tree_to_gurobi import classify_tree, build_preds
+
+            # Initialise elastic attrs; they stay None unless we reach the
+            # elastic phase.
+            program.elastic_status = None
+            program.elastic_has_solution = None
 
             # Data from the program's task.
             X = program.task.X_train
@@ -188,6 +252,10 @@ class GurobiConstOptimizer(ConstOptimizer):
             )
             tm.optimize()
 
+            # Stamp hard-solve status immediately after optimize returns.
+            program.hard_status = _map_gurobi_status(m.Status)
+            program.hard_has_solution = m.SolCount > 0
+
             # Rule 3: hard solve found an incumbent → verify in numpy.
             if m.SolCount > 0:
                 consts = np.array([v.X for v in const_vars])
@@ -196,6 +264,7 @@ class GurobiConstOptimizer(ConstOptimizer):
                 )
                 program.budget_status = status
                 program.budget_violation = violation
+                # elastic attrs remain None (elastic phase was skipped).
                 return consts
 
             # ----------------------------------------------------------------
@@ -222,6 +291,10 @@ class GurobiConstOptimizer(ConstOptimizer):
             tm2.add_budget_violation_objective(preds2, y, self.budget_slack)
             tm2.optimize()
 
+            # Stamp elastic-solve status (hard_status was already stamped above).
+            program.elastic_status = _map_gurobi_status(m2.Status)
+            program.elastic_has_solution = m2.SolCount > 0
+
             if m2.SolCount > 0:
                 consts2 = np.array([cv.X for cv in const_vars2])
                 status2, violation2 = self._verify_feasibility(
@@ -240,6 +313,10 @@ class GurobiConstOptimizer(ConstOptimizer):
             # Catches ImportError, gurobipy.GurobiError, and anything else so
             # the RL search always continues.
             if program is not None:
+                program.hard_status = "error"
+                program.hard_has_solution = False
+                program.elastic_status = None
+                program.elastic_has_solution = None
                 program.budget_status = "unknown"
                 program.budget_violation = None
             return x0

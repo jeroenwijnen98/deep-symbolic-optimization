@@ -79,6 +79,7 @@
       "save_cache_r_min" : 0.9,
       "save_freq" : 1,
       "save_token_count" : false,
+      "save_expressions" : true,
       // Size of the "hall of fame" (top performers during training) to save.
       "hof" : 100
    },

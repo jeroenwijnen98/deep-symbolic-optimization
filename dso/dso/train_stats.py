@@ -25,7 +25,8 @@ class StatsLogger():
 
     def __init__(self, sess, output_file, save_summary=False, save_all_iterations=False, hof=100,
                  save_pareto_front=True, save_positional_entropy=False, save_top_samples_per_batch=0,
-                 save_cache=False, save_cache_r_min=0.9, save_freq=1, save_token_count=False):
+                 save_cache=False, save_cache_r_min=0.9, save_freq=1, save_token_count=False,
+                 save_expressions=False):
 
         """"
         sess : tf.Session
@@ -75,6 +76,7 @@ class StatsLogger():
         self.save_cache = save_cache
         self.save_cache_r_min = save_cache_r_min
         self.save_token_count = save_token_count
+        self.save_expressions = save_expressions
         self.all_r = []   # save all R separately to keep backward compatibility with a generated file.
 
         if save_freq is None:
@@ -107,6 +109,12 @@ class StatsLogger():
             self.top_samples_per_batch_output_file = "{}_top_samples_per_batch.csv".format(prefix)
             self.cache_output_file = "{}_cache.csv".format(prefix)
             self.token_counter_output_file = "{}_token_count.csv".format(prefix)
+            if self.save_expressions:
+                self.expressions_dir = os.path.join(
+                    os.path.dirname(self.output_file), "expressions")
+                os.makedirs(self.expressions_dir, exist_ok=True)
+            else:
+                self.expressions_dir = None
             with open(self.output_file, 'w') as f:
                 # r_best : Maximum across all iterations so far
                 # r_max : Maximum across this iteration's batch
@@ -162,6 +170,7 @@ class StatsLogger():
             self.top_samples_per_batch_output_file = None
             self.cache_output_file = None
             self.token_counter_output_file = None
+            self.expressions_dir = None
 
         # Create summary writer
         if self.save_summary:
@@ -399,6 +408,70 @@ class StatsLogger():
         result['n_samples'] = n_samples
         result['n_cached'] = len(Program.cache)
         return result
+
+    def write_expressions_csv(self, iteration, programs):
+        """Write one CSV per iteration containing every generated expression.
+
+        Parameters
+        ----------
+        iteration : int
+            1-based iteration index (used in the filename).
+        programs : list of Program
+            All programs in the full (pre-filter) batch for this iteration.
+        """
+        if not self.save_expressions or self.expressions_dir is None:
+            return
+
+        columns = [
+            "iteration", "expression", "reward",
+            "budget_shortfall_abs", "budget_shortfall_pct",
+            "hard_status", "hard_has_solution",
+            "elastic_status", "elastic_has_solution",
+            "budget_status", "invalid",
+        ]
+        rows = []
+        for p in programs:
+            try:
+                row = {
+                    "iteration": iteration,
+                    "expression": repr(p.sympy_expr),
+                    "reward": p.r,
+                    "budget_shortfall_abs": p.budget_shortfall,
+                    "budget_shortfall_pct": p.budget_shortfall_pct,
+                    "hard_status": getattr(p, "hard_status", None),
+                    "hard_has_solution": getattr(p, "hard_has_solution", None),
+                    "elastic_status": getattr(p, "elastic_status", None),
+                    "elastic_has_solution": getattr(p, "elastic_has_solution", None),
+                    "budget_status": getattr(p, "budget_status", None),
+                    "invalid": p.invalid,
+                }
+            except Exception:
+                # Best-effort fallback: emit what we can, leave rest as None.
+                row = {col: None for col in columns}
+                row["iteration"] = iteration
+                try:
+                    row["reward"] = p.r
+                except Exception:
+                    pass
+                try:
+                    row["invalid"] = p.invalid
+                except Exception:
+                    pass
+                try:
+                    row["hard_status"] = getattr(p, "hard_status", None)
+                    row["hard_has_solution"] = getattr(p, "hard_has_solution", None)
+                    row["elastic_status"] = getattr(p, "elastic_status", None)
+                    row["elastic_has_solution"] = getattr(p, "elastic_has_solution", None)
+                    row["budget_status"] = getattr(p, "budget_status", None)
+                except Exception:
+                    pass
+            rows.append(row)
+
+        out_path = os.path.join(
+            self.expressions_dir,
+            "expr_iter_{:04d}.csv".format(iteration)
+        )
+        pd.DataFrame(rows, columns=columns).to_csv(out_path, index=False)
 
     def write_token_count(self, programs):
         token_counter = {token: 0 for token in Program.library.names}

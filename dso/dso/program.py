@@ -223,6 +223,13 @@ class Program(object):
     have_cython = None      # Do we have cython installed
     execute = None          # Link to execute. Either cython or python
 
+    # Default values for constant-optimizer status attributes (set per-instance
+    # by the const optimizer after each call; None = not yet determined / NA).
+    hard_status = None
+    hard_has_solution = None
+    elastic_status = None
+    elastic_has_solution = None
+
     def __init__(self, tokens=None, on_policy=True):
         """
         Builds the Program from a list of of integers corresponding to Tokens.
@@ -285,6 +292,7 @@ class Program(object):
         # TBD: Should use np.float32
 
         if len(self.const_pos) == 0:
+            self.hard_status = "no_constants"
             return
 
         # Define the objective function: negative reward
