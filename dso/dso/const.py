@@ -167,13 +167,14 @@ class GurobiConstOptimizer(ConstOptimizer):
 
     def __init__(self, budget_slack=0.0, loss_function="pos_squared",
                  lower_bound=-1e5, upper_bound=1e5, time_limit=None,
-                 **kwargs):
+                 threads=1, **kwargs):
         super(GurobiConstOptimizer, self).__init__(**kwargs)
         self.budget_slack = budget_slack
         self.loss_function = loss_function
         self.lower_bound = lower_bound
         self.upper_bound = upper_bound
         self.time_limit = time_limit
+        self.threads = threads
 
     @staticmethod
     def _verify_feasibility(program, X, y, consts, budget_slack):
@@ -233,6 +234,7 @@ class GurobiConstOptimizer(ConstOptimizer):
             tm = TaxModel("gurobipy")
             m = tm.solver
             m.Params.OutputFlag = 0
+            m.Params.Threads = self.threads
 
             kind = classify_tree(program.traversal, program.library)
             _apply_nonlinear_settings(m, kind)
@@ -273,6 +275,7 @@ class GurobiConstOptimizer(ConstOptimizer):
             tm2 = TaxModel("gurobipy")
             m2 = tm2.solver
             m2.Params.OutputFlag = 0
+            m2.Params.Threads = self.threads
             _apply_nonlinear_settings(m2, kind)
 
             const_vars2 = [
