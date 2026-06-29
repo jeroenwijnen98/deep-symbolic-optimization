@@ -59,8 +59,8 @@ unprotected_ops = [
     Token(np.square, "n2", arity=1, complexity=2),
     Token(np.negative, "neg", arity=1, complexity=1),
     Token(np.abs, "abs", arity=1, complexity=2),
-    Token(np.maximum, "max", arity=1, complexity=4),
-    Token(np.minimum, "min", arity=1, complexity=4),
+    Token(np.maximum, "max", arity=2, complexity=4),
+    Token(np.minimum, "min", arity=2, complexity=4),
     Token(np.tanh, "tanh", arity=1, complexity=4),
     Token(np.reciprocal, "inv", arity=1, complexity=2),
 
