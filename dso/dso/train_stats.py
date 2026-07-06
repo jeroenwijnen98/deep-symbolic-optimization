@@ -1,5 +1,6 @@
 """Performs computations and file manipulations for train statistics logging purposes"""
 import os
+import re
 import numpy as np
 import tensorflow as tf
 from datetime import datetime
@@ -26,7 +27,7 @@ class StatsLogger():
     def __init__(self, sess, output_file, save_summary=False, save_all_iterations=False, hof=100,
                  save_pareto_front=True, save_positional_entropy=False, save_top_samples_per_batch=0,
                  save_cache=False, save_cache_r_min=0.9, save_freq=1, save_token_count=False,
-                 save_expressions=False):
+                 save_expressions=False, variable_mapping=None):
 
         """"
         sess : tf.Session
@@ -64,6 +65,13 @@ class StatsLogger():
 
         save_token_count : bool
             Wether to count used tokens in each iteration
+
+        variable_mapping : str or None, optional
+            Path to a CSV with columns `dso_name,column_name` mapping DSO
+            variable names (x1..xN) to real feature names. When provided, an
+            `expression_named` column is added to the hof/pf output. If None or
+            the file is missing, the mapping is a no-op and `expression_named`
+            equals `expression`.
         """
         self.sess = sess
         self.output_file = output_file
@@ -77,6 +85,8 @@ class StatsLogger():
         self.save_cache_r_min = save_cache_r_min
         self.save_token_count = save_token_count
         self.save_expressions = save_expressions
+        self.variable_mapping_file = variable_mapping
+        self.variable_map = self._load_variable_map(variable_mapping)
         self.all_r = []   # save all R separately to keep backward compatibility with a generated file.
 
         if save_freq is None:
@@ -93,6 +103,30 @@ class StatsLogger():
         self.buffer_pos_entropy = BytesIO()  # Buffer for positional entropy
 
         self.setup_output_files()
+
+    def _load_variable_map(self, variable_mapping):
+        """Load the dso_name -> column_name mapping from a CSV, if available.
+
+        Returns an empty dict when no valid mapping file is provided, which makes
+        the expression-renaming a no-op.
+        """
+        if not variable_mapping or not os.path.isfile(variable_mapping):
+            return {}
+        df = pd.read_csv(variable_mapping)
+        return dict(zip(df["dso_name"], df["column_name"]))
+
+    def _rename_expression(self, expr_str):
+        """Replace DSO variable names (x1..xN) with real feature names.
+
+        Uses a whole-token regex so that e.g. x1 does not match inside x14.
+        Unmapped tokens are left unchanged. Returns the input unchanged when no
+        mapping is available.
+        """
+        if not self.variable_map or not isinstance(expr_str, str):
+            return expr_str
+        return re.sub(r"x\d+",
+                      lambda m: self.variable_map.get(m.group(0), m.group(0)),
+                      expr_str)
 
     def setup_output_files(self):
         """
@@ -335,6 +369,9 @@ class StatsLogger():
             columns = ["r", "count_on_policy", "count_off_policy", "expression", "traversal"] + eval_keys
             hof_results = [result[:-1] + [result[-1][k] for k in eval_keys] for result in results]
             df = pd.DataFrame(hof_results, columns=columns)
+            expr_col = df.columns.get_loc("expression")
+            df.insert(expr_col + 1, "expression_named",
+                      df["expression"].apply(self._rename_expression))
             if self.hof_output_file is not None:
                 print("Saving Hall of Fame to {}".format(self.hof_output_file))
                 df.to_csv(self.hof_output_file, header=True, index=False)
@@ -369,6 +406,9 @@ class StatsLogger():
             columns = ["complexity", "r", "count_on_policy", "count_off_policy", "expression", "traversal"] + eval_keys
             pf_results = [result[:-1] + [result[-1][k] for k in eval_keys] for result in results]
             df = pd.DataFrame(pf_results, columns=columns)
+            expr_col = df.columns.get_loc("expression")
+            df.insert(expr_col + 1, "expression_named",
+                      df["expression"].apply(self._rename_expression))
             if self.pf_output_file is not None:
                 print("Saving Pareto Front to {}".format(self.pf_output_file))
                 df.to_csv(self.pf_output_file, header=True, index=False)

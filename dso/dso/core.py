@@ -216,9 +216,22 @@ class DeepSymbolicOptimizer():
         return trainer
 
     def make_logger(self):
+        # Resolve the variable-mapping file used to add an 'expression_named'
+        # column to the hof/pf output. If not set explicitly in the logging
+        # config, auto-derive it as <dataset>_variable_mapping.csv next to the
+        # dataset (only meaningful for CSV datasets).
+        variable_mapping = self.config_logger.get("variable_mapping")
+        if variable_mapping is None:
+            dataset = self.config["task"].get("dataset")
+            if isinstance(dataset, str) and dataset.endswith(".csv"):
+                candidate = dataset[:-4] + "_variable_mapping.csv"
+                if os.path.exists(candidate):
+                    variable_mapping = candidate
         logger = StatsLogger(self.sess,
                              self.output_file,
-                             **self.config_logger)
+                             variable_mapping=variable_mapping,
+                             **{k: v for k, v in self.config_logger.items()
+                                if k != "variable_mapping"})
         return logger
 
     def make_checkpoint(self):
@@ -293,24 +306,24 @@ class DeepSymbolicOptimizer():
             timestamp = datetime.now().strftime("%Y-%m-%d-%H%M%S")
             self.config_experiment["timestamp"] = timestamp
 
-        # Generate save path
-        task_name = Program.task.name
-        if self.config_experiment["exp_name"] is None:
-            save_path = os.path.join(
-                self.config_experiment["logdir"],
-                '_'.join([task_name, timestamp]))
-        else:
-            save_path = os.path.join(
-                self.config_experiment["logdir"],
-                self.config_experiment["exp_name"])
+        # Generate save path. Use the user-provided exp_name as the base name
+        # if given; otherwise fall back to the auto-derived task name. The base
+        # name is used consistently for the folder, the filenames, and the
+        # stored task_name (which logeval uses to locate the log files). The
+        # timestamp is always appended to the folder and the seed to the
+        # filenames, exactly as in the default (no exp_name) case.
+        base_name = self.config_experiment["exp_name"] or Program.task.name
+        save_path = os.path.join(
+            self.config_experiment["logdir"],
+            '_'.join([base_name, timestamp]))
 
-        self.config_experiment["task_name"] = task_name
+        self.config_experiment["task_name"] = base_name
         self.config_experiment["save_path"] = save_path
         os.makedirs(save_path, exist_ok=True)
 
         seed = self.config_experiment["seed"]
         output_file = os.path.join(save_path,
-                                   "dso_{}_{}.csv".format(task_name, seed))
+                                   "dso_{}_{}.csv".format(base_name, seed))
 
         self.save_path = save_path
 
