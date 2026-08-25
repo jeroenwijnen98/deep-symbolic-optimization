@@ -71,7 +71,7 @@ class RegressionTask(HierarchicalTask):
             Name of the metric used to determine success for early stopping.
             If None (default), the training `metric` is reused. The special
             value "nmse" thresholds NMSE on the noiseless test data. Any metric
-            supported by make_regression_metric (e.g. "neg_mswl", "neg_mse",
+            supported by make_regression_metric (e.g. "neg_mspr", "neg_mse",
             "inv_nrmse", "pearson") may be used instead; success is judged as a
             two-sided band around that metric's own optimum (max_reward), so the
             metric's sign/range does not matter.
@@ -224,7 +224,7 @@ class RegressionTask(HierarchicalTask):
         self.budget_slack = budget_slack
         if feasibility_first:
             assert self.max_reward == 1.0 and self.invalid_reward == 0.0, (
-                "feasibility_first requires a [0,1]-bounded metric such as inv_nrmswl "
+                "feasibility_first requires a [0,1]-bounded metric such as inv_nrmspr "
                 f"(got max_reward={self.max_reward}, invalid_reward={self.invalid_reward})")
             tau = (violation_tau_pct / 100.0) * abs(float(np.sum(self.y_train)))
             self.violation_tau = tau if tau != 0.0 else 1.0
@@ -492,15 +492,15 @@ def make_regression_metric(name, y_train, *args):
         "spearman" :    (lambda y, y_hat : scipy.stats.spearmanr(y, y_hat)[0],
                         0),
 
-        # Negative mean Square welfare loss
+        # Negative mean square positive residual
         # Range: [-inf, 0]
-        "neg_mswl": (lambda y, y_hat : -np.mean(np.maximum(0, y_hat-y)**2),
+        "neg_mspr": (lambda y, y_hat : -np.mean(np.maximum(0, y_hat-y)**2),
                     0),
 
-        # Inverse normalized root mean square welfare loss
-        # Range: (0, 1]; 1 = perfect fit (zero welfare loss)
+        # Inverse normalized root mean square positive residual
+        # Range: (0, 1]; 1 = perfect fit (zero positive residual)
         # Value = 1/(1 + sqrt(mean(max(0, y_hat-y)^2) / var(y))) for general y_hat
-        "inv_nrmswl": (lambda y, y_hat : 1.0 / (1.0 + np.sqrt(np.mean(np.maximum(0, y_hat - y) ** 2) / var_y)),
+        "inv_nrmspr": (lambda y, y_hat : 1.0 / (1.0 + np.sqrt(np.mean(np.maximum(0, y_hat - y) ** 2) / var_y)),
                       0),
     }
 
@@ -523,8 +523,8 @@ def make_regression_metric(name, y_train, *args):
         "fraction" : 0.0,
         "pearson" : 0.0,
         "spearman" : 0.0,
-        "neg_mswl": -var_y,
-        "inv_nrmswl": 0.0,
+        "neg_mspr": -var_y,
+        "inv_nrmspr": 0.0,
     }
     invalid_reward = all_invalid_rewards[name]
 
@@ -540,8 +540,8 @@ def make_regression_metric(name, y_train, *args):
         "fraction" : 1.0,
         "pearson" : 1.0,
         "spearman" : 1.0,
-        "neg_mswl": 0.0,
-        "inv_nrmswl": 1.0,
+        "neg_mspr": 0.0,
+        "inv_nrmspr": 1.0,
     }
     max_reward = all_max_rewards[name]
 

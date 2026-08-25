@@ -136,8 +136,8 @@ class ScipyMinimize(ConstOptimizer):
 class GurobiConstOptimizer(ConstOptimizer):
     """Gurobi-based inner constant optimizer for DSR trees.
 
-    Solves the constrained inner problem: minimize positive-residual welfare
-    loss subject to an aggregate budget constraint, by compiling the DSR
+    Solves the constrained inner problem: minimize the summed positive
+    residuals subject to an aggregate budget constraint, by compiling the DSR
     expression tree into an algebraic Gurobi model.
 
     For trees that are affine in their constants the inner problem is a convex
