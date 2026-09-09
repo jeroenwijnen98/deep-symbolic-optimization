@@ -537,6 +537,21 @@ class RelationalConstraint(Constraint):
             violated = jit_check_constraint_violation_uchild(actions, parent, sibling, self.targets, 
                                                      adj_unary_effectors, adj_effectors)
 
+        elif self.relationship in ["lchild", "rchild"]:
+            # Same masks as __call__, evaluated over a finished traversal: a
+            # left child is the one whose sibling input is still empty.
+            adj_parents = self.library.parent_adjust[self.effectors]
+            mask = np.logical_and(np.isin(actions, self.targets),
+                                  np.isin(parent, adj_parents))
+            if self.relationship == "lchild":
+                mask = np.logical_and(mask, np.equal(sibling, self.library.EMPTY_SIBLING))
+            else:
+                mask = np.logical_and(mask, np.not_equal(sibling, self.library.EMPTY_SIBLING))
+            violated = bool(np.any(mask))
+
+        else:
+            raise ValueError("Unrecognized relationship: {}".format(self.relationship))
+
         return violated
 
     def validate(self):
