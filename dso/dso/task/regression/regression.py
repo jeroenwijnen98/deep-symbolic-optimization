@@ -25,7 +25,7 @@ class RegressionTask(HierarchicalTask):
                  normalize_variance=False, protected=False,
                  decision_tree_threshold_set=None,
                  poly_optimizer_params=None,
-                 indicator_approx_steepness=None,
+                 cutoff_alpha=None,
                  feasibility_first=False, violation_tau_pct=1.0,
                  budget_slack=0.0):
         """
@@ -205,9 +205,9 @@ class RegressionTask(HierarchicalTask):
             self.rng = None
             self.scale = None
 
-        # Apply indicator_approx steepness override before tokens are created
-        if indicator_approx_steepness is not None:
-            dso_functions.INDICATOR_APPROX_STEEPNESS = indicator_approx_steepness
+        # Apply the cutoff's alpha override before tokens are created
+        if cutoff_alpha is not None:
+            dso_functions.CUTOFF_ALPHA = cutoff_alpha
 
         # Set the Library
         tokens = create_tokens(n_input_var=self.X_train.shape[1],

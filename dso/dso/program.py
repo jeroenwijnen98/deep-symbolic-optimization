@@ -542,7 +542,7 @@ class Program(object):
         """Exclude unpicklable cached attributes when pickling a Program.
 
         The cached ``sympy_expr`` can hold SymPy objects for custom operators
-        (e.g. ``indicator_approx``) whose dynamically-created function classes
+        (e.g. ``cutoff``) whose dynamically-created function classes
         report ``__module__ == '__main__'`` and therefore cannot be pickled.
         This breaks sending Programs to/from worker processes when
         ``n_cores_batch > 1`` (parallel reward eval and Hall-of-Fame saving).

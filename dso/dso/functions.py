@@ -8,9 +8,9 @@ import dso.utils as U
 
 GAMMA = 0.57721566490153286060651209008240243104215933593992
 
-# Steepness for indicator_approx; larger = sharper transition. Overwritten from
-# RegressionTask config (key: indicator_approx_steepness).
-INDICATOR_APPROX_STEEPNESS = 1.0
+# Alpha of the smoothed cutoff; larger = sharper transition. Overwritten from
+# RegressionTask config (key: cutoff_alpha).
+CUTOFF_ALPHA = 1.0
 
 
 """Define custom unprotected operators"""
@@ -36,9 +36,9 @@ def harmonic(x1):
     else:
         return GAMMA + np.log(x1) + 0.5/x1 - 1./(12*x1**2) + 1./(120*x1**4)
 
-def indicator_approx(x1, x2):
-    """Smooth approximation of 1[x1 > x2]. Larger INDICATOR_APPROX_STEEPNESS = sharper."""
-    return 1 / (1 + np.exp(-(x1 - x2) * INDICATOR_APPROX_STEEPNESS))
+def _cutoff_smooth(x1, x2):
+    """Smooth approximation of 1[x1 > x2]. Larger CUTOFF_ALPHA = sharper."""
+    return 1 / (1 + np.exp(-(x1 - x2) * CUTOFF_ALPHA))
 
 
 # Annotate unprotected ops
@@ -47,32 +47,59 @@ unprotected_ops = [
     Token(np.add, "add", arity=2, complexity=1),
     Token(np.subtract, "sub", arity=2, complexity=1),
     Token(np.multiply, "mul", arity=2, complexity=1),
-    Token(np.divide, "div", arity=2, complexity=2),
+    Token(np.divide, "div", arity=2, complexity=1),
 
     # Built-in unary operators
-    Token(np.sin, "sin", arity=1, complexity=3),
-    Token(np.cos, "cos", arity=1, complexity=3),
-    Token(np.tan, "tan", arity=1, complexity=4),
-    Token(np.exp, "exp", arity=1, complexity=4),
-    Token(np.log, "log", arity=1, complexity=4),
-    Token(np.sqrt, "sqrt", arity=1, complexity=4),
-    Token(np.square, "n2", arity=1, complexity=2),
+    Token(np.sin, "sin", arity=1, complexity=1),
+    Token(np.cos, "cos", arity=1, complexity=1),
+    Token(np.tan, "tan", arity=1, complexity=1),
+    Token(np.exp, "exp", arity=1, complexity=1),
+    Token(np.log, "log", arity=1, complexity=1),
+    Token(np.sqrt, "sqrt", arity=1, complexity=1),
+    Token(np.square, "n2", arity=1, complexity=1),
     Token(np.negative, "neg", arity=1, complexity=1),
-    Token(np.abs, "abs", arity=1, complexity=2),
-    Token(np.maximum, "max", arity=2, complexity=4),
-    Token(np.minimum, "min", arity=2, complexity=4),
-    Token(np.tanh, "tanh", arity=1, complexity=4),
-    Token(np.reciprocal, "inv", arity=1, complexity=2),
+    Token(np.abs, "abs", arity=1, complexity=1),
+    Token(np.maximum, "max", arity=2, complexity=1),
+    Token(np.minimum, "min", arity=2, complexity=1),
+    Token(np.tanh, "tanh", arity=1, complexity=1),
+    Token(np.reciprocal, "inv", arity=1, complexity=1),
 
     # Custom unary operators
-    Token(logabs, "logabs", arity=1, complexity=4),
-    Token(expneg, "expneg", arity=1, complexity=4),
-    Token(n3, "n3", arity=1, complexity=3),
-    Token(n4, "n4", arity=1, complexity=3),
-    Token(sigmoid, "sigmoid", arity=1, complexity=4),
-    Token(harmonic, "harmonic", arity=1, complexity=4),
-    Token(indicator_approx, "indicator_approx", arity=2, complexity=4)
+    Token(logabs, "logabs", arity=1, complexity=1),
+    Token(expneg, "expneg", arity=1, complexity=1),
+    Token(n3, "n3", arity=1, complexity=1),
+    Token(n4, "n4", arity=1, complexity=1),
+    Token(sigmoid, "sigmoid", arity=1, complexity=1),
+    Token(harmonic, "harmonic", arity=1, complexity=1),
+    Token(_cutoff_smooth, "cutoff", arity=2, complexity=1),
 ]
+
+
+"""The gt0-gt4 declared-threshold gates (#54).
+
+gt<n>(x) = 1[x > n], unary: the cutoff's sibling, carrying its threshold as a
+literal in the operator's own name instead of a fitted threshold constant.  The
+digit is the literal in a strict >, matching cutoff, so a gate reads one below
+the level it selects.  No protected twins: no division and no exponential, so a
+protected_gt0 would be an identical alias, and create_tokens already falls back
+to the unprotected token when no twin is registered.
+"""
+GT_LEVELS = range(5)
+
+
+def _make_gt(n):
+    def gt_n(x1):
+        return np.greater(x1, n).astype(np.float64)
+    gt_n.__name__ = "gt{}".format(n)
+    gt_n.__doc__ = "Declared-threshold gate 1[x1 > {}].".format(n)
+    return gt_n
+
+
+unprotected_ops.extend(
+    Token(_make_gt(n), "gt{}".format(n), arity=1, complexity=1) for n in GT_LEVELS)
+
+# Exported so nothing re-derives ["gt0", ..., "gt4"] by hand.
+GT_TOKEN_NAMES = ["gt{}".format(n) for n in GT_LEVELS]
 
 
 """Define custom protected operators"""
@@ -122,11 +149,11 @@ def protected_sigmoid(x1):
         return np.where(x1 < -100, 0.0,
                np.where(x1 > 100, 1.0, 1 / (1 + np.exp(-x1))))
 
-def protected_indicator_approx(x1, x2):
-    """Smooth approximation of 1[x1 > x2]. Larger INDICATOR_APPROX_STEEPNESS = sharper."""
+def _protected_cutoff_smooth(x1, x2):
+    """Smooth approximation of 1[x1 > x2]. Larger CUTOFF_ALPHA = sharper."""
     # See protected_sigmoid: clip the output to {0,1} in the saturated tails so the
     # overflow tail (x1 << x2) returns 0, not 1.
-    t = (x1 - x2) * INDICATOR_APPROX_STEEPNESS
+    t = (x1 - x2) * CUTOFF_ALPHA
     with np.errstate(over='ignore'):
         return np.where(t < -100, 0.0,
                np.where(t > 100, 1.0, 1 / (1 + np.exp(-t))))
@@ -134,20 +161,20 @@ def protected_indicator_approx(x1, x2):
 # Annotate protected ops
 protected_ops = [
     # Protected binary operators
-    Token(protected_div, "div", arity=2, complexity=2),
+    Token(protected_div, "div", arity=2, complexity=1),
 
     # Protected unary operators
-    Token(protected_exp, "exp", arity=1, complexity=4),
-    Token(protected_log, "log", arity=1, complexity=4),
-    Token(protected_log, "logabs", arity=1, complexity=4), # Protected logabs is support, but redundant
-    Token(protected_sqrt, "sqrt", arity=1, complexity=4),
-    Token(protected_inv, "inv", arity=1, complexity=2),
-    Token(protected_expneg, "expneg", arity=1, complexity=4),
-    Token(protected_n2, "n2", arity=1, complexity=2),
-    Token(protected_n3, "n3", arity=1, complexity=3),
-    Token(protected_n4, "n4", arity=1, complexity=3),
-    Token(protected_sigmoid, "sigmoid", arity=1, complexity=4),
-    Token(protected_indicator_approx, "indicator_approx", arity=2, complexity=4)
+    Token(protected_exp, "exp", arity=1, complexity=1),
+    Token(protected_log, "log", arity=1, complexity=1),
+    Token(protected_log, "logabs", arity=1, complexity=1), # Protected logabs is support, but redundant
+    Token(protected_sqrt, "sqrt", arity=1, complexity=1),
+    Token(protected_inv, "inv", arity=1, complexity=1),
+    Token(protected_expneg, "expneg", arity=1, complexity=1),
+    Token(protected_n2, "n2", arity=1, complexity=1),
+    Token(protected_n3, "n3", arity=1, complexity=1),
+    Token(protected_n4, "n4", arity=1, complexity=1),
+    Token(protected_sigmoid, "sigmoid", arity=1, complexity=1),
+    Token(_protected_cutoff_smooth, "cutoff", arity=2, complexity=1),
 ]
 
 # Add unprotected ops to function map
