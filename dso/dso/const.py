@@ -187,7 +187,10 @@ class GurobiConstOptimizer(ConstOptimizer):
         or ("unknown", None) if the program's output is not finite.
         """
         program.set_constants(consts)
-        y_hat = program.execute(X)
+        # Hardened, like the reward that reads this status: the solver fits
+        # through the smoothed cutoff, and what is checked is whether the
+        # constants it returned are feasible for the expression as reported (F4).
+        y_hat = program.execute(X, exact=True)
         if y_hat is None or not np.all(np.isfinite(y_hat)):
             return ("unknown", None)
         shortfall = float(np.sum(y) - np.sum(y_hat))

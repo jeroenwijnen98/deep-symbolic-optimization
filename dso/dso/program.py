@@ -8,6 +8,7 @@ from textwrap import indent
 import numpy as np
 from dso.library import Token, PlaceholderConstant, Polynomial
 from dso.const import make_const_optimizer
+from dso import functions as dso_functions
 from dso.utils import cached_property
 import dso.utils as U
 
@@ -261,7 +262,92 @@ class Program(object):
         self.off_policy_count = 0 if on_policy else 1
         self.originally_on_policy = on_policy # Note if a program was created on policy
 
-    def execute(self, X):
+        # Which nodes are cutoffs, and which feature each one tests (F5, F6).
+        # Derived here rather than stored, so a traversal that arrives from
+        # from_tokens, from_str_tokens or the GP path needs nothing of its own.
+        self.cutoff_pos = self._scan_cutoffs()
+        self._set_cutoff_steepness()
+
+    def _scan_cutoffs(self):
+        """Map each cutoff's traversal index to the feature index it tests.
+
+        The relational prior forces cutoff(feature, const): no operator, no
+        `const` and no non-continuous feature may be a cutoff's left child, so a
+        cutoff at index i has traversal[i+1] = a bare input variable and
+        traversal[i+2] = its threshold constant.  A traversal built outside the
+        search need not obey the prior; a cutoff whose left child is not an input
+        variable maps to None, and falls back to the module-level alpha (F5) and
+        to x0 = 1.0 (F6) rather than to a guess.
+        """
+        cutoffs = {}
+        for i, token in enumerate(self.traversal):
+            if token.name != dso_functions.CUTOFF_TOKEN_NAME:
+                continue
+            child = self.traversal[i + 1] if i + 1 < self.len_traversal else None
+            cutoffs[i] = None if child is None else child.input_var
+        return cutoffs
+
+    def _set_cutoff_steepness(self):
+        """Bind k = alpha / s into each cutoff, once per unique expression (F5).
+
+        s is the standard deviation of the feature the cutoff tests, so the
+        transition band is one width in the units of that feature rather than one
+        width for every cutoff in every expression.  The task caches the vector at
+        construction, on the train split alone; execute_function calls the token
+        with arrays, so the column identity is not recoverable at the call site
+        and the steepness has to be bound here.  __init__ runs once per unique
+        expression and the reward runs millions of times, which is why this is not
+        done per evaluation.  Alpha is read off the module rather than bound at
+        import, so a task constructed after this module was imported -- which is
+        every task, since RegressionTask writes the config's alpha into the global
+        -- is the one that steers it.
+        """
+        sd = getattr(Program.task, "cutoff_sd", None)
+        if sd is None:
+            return
+        for i, feature in self.cutoff_pos.items():
+            if feature is None:
+                continue
+            self.traversal[i] = dso_functions.cutoff_token(
+                k=dso_functions.CUTOFF_ALPHA / sd[feature],
+                protected=Program.protected)
+
+    def _exact_traversal(self):
+        """This program's traversal with every cutoff hardened to the exact step."""
+        if not self.cutoff_pos:
+            return self.traversal
+        traversal = list(self.traversal)
+        for i in self.cutoff_pos:
+            traversal[i] = dso_functions.EXACT_CUTOFF_TOKEN
+        return traversal
+
+    def _const_x0(self):
+        """Initial values for constant fitting: 1.0, except threshold constants.
+
+        A threshold constant starts at the median of the positive values of the
+        feature its cutoff tests, not at 1.0 (F6, #47): from 1.0 a threshold on a
+        zero-inflated or wide-scale feature never leaves the bottom of its range
+        at any steepness.  The rule is not conditional on zero-inflation -- on a
+        feature with no zeros median(x > 0) is the plain median, which is what is
+        wanted.  A feature with no positive values on train has no median to start
+        from, and falls back to 1.0 silently: an identically-zero column is a data
+        problem, not a constant-fitting problem.
+        """
+        x0 = np.ones(len(self.const_pos))
+        median_pos = getattr(Program.task, "cutoff_median_pos", None)
+        if median_pos is None:
+            return x0
+        const_index = {pos: j for j, pos in enumerate(self.const_pos)}
+        for i, feature in self.cutoff_pos.items():
+            j = const_index.get(i + 2)
+            if feature is None or j is None:
+                continue
+            start = median_pos[feature]
+            if np.isfinite(start):
+                x0[j] = start
+        return x0
+
+    def execute(self, X, exact=False):
         """
         Execute program on input X.
 
@@ -271,16 +357,25 @@ class Program(object):
         X : np.array
             Input to execute the Program over.
 
+        exact : bool
+            Execute every `cutoff` as the exact step 1[x1 > x2] instead of the
+            smoothed form constant fitting is differentiated through (F4).  The
+            expression is the same expression either way; only the operator it is
+            executed under differs, which is why this is an argument and not a
+            second token.  It is a per-call argument rather than a module-level
+            flag because reward evaluation is parallelised over processes.
+
         Returns
         =======
 
         result : np.array or list of np.array
             In a single-object Program, returns just an array. In a multi-object Program, returns a list of arrays.
         """
+        traversal = self._exact_traversal() if exact else self.traversal
         if not Program.protected:
-            result, self.invalid, self.error_node, self.error_type = Program.execute_function(self.traversal, X)
+            result, self.invalid, self.error_node, self.error_type = Program.execute_function(traversal, X)
         else:
-            result = Program.execute_function(self.traversal, X)
+            result = Program.execute_function(traversal, X)
         return result
 
     def optimize(self):
@@ -308,7 +403,7 @@ class Program(object):
             return obj
 
         # Do the optimization
-        x0 = np.ones(len(self.const_pos)) # Initial guess
+        x0 = self._const_x0() # Initial guess: 1.0, except threshold constants
         optimized_constants = Program.const_optimizer(f, x0, program=self)
 
         # Set the optimized constants
@@ -498,7 +593,9 @@ class Program(object):
             self.optimize()
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            y_hat = self.execute(self.task.X_train)
+            # Hardened: this number is reported beside the expression, and the
+            # budget claim has to be about the expression as reported (F4).
+            y_hat = self.execute(self.task.X_train, exact=True)
         if self.invalid:
             return None
         return float(np.sum(self.task.y_train) - np.sum(y_hat))

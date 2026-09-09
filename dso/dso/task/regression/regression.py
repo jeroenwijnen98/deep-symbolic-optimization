@@ -209,6 +209,15 @@ class RegressionTask(HierarchicalTask):
         if cutoff_alpha is not None:
             dso_functions.CUTOFF_ALPHA = cutoff_alpha
 
+        # Per-feature scales the smoothed cutoff is fitted through: the steepness
+        # k = alpha / s of each cutoff instance (F5) and the value its threshold
+        # constant starts at (F6).  Cached once here and read by Program.__init__,
+        # never recomputed per evaluation.  Train split only: with hardening in the
+        # reward, the smoothed cutoff is seen by constant fitting and by nothing
+        # else, and constant fitting only ever runs on train, so nothing reported
+        # depends on either vector.
+        self.cutoff_sd, self.cutoff_median_pos = cutoff_scales(self.X_train)
+
         # Set the Library
         tokens = create_tokens(n_input_var=self.X_train.shape[1],
                                function_set=function_set,
@@ -280,8 +289,13 @@ class RegressionTask(HierarchicalTask):
             else:
                 p.traversal[p.poly_pos] = self.poly_optimizer.fit(self.X_train, poly_data_y)
 
-        # Compute estimated values
-        y_hat = p.execute(self.X_train)
+        # Compute estimated values.  Hardening is one line on a seam that already
+        # exists: constant fitting is differentiated through the smoothed cutoff
+        # because it needs the gradient, and the reward then scores that result on
+        # the exact operator the expression is reported with (F4, ADR 0004).  The
+        # smoothed reward stays reachable -- it is what an ablation on hardening
+        # would run -- because `exact` is an argument.
+        y_hat = p.execute(self.X_train, exact=not optimizing)
 
         # For invalid expressions, return invalid_reward
         if p.invalid:
@@ -341,8 +355,10 @@ class RegressionTask(HierarchicalTask):
 
     def evaluate(self, p):
 
-        # Compute predictions on test data
-        y_hat = p.execute(self.X_test)
+        # Compute predictions on test data.  Hardened like the reward: every
+        # number this emits is reported beside the expression, and the early-stop
+        # threshold is calibrated against the reward's scale (F4).
+        y_hat = p.execute(self.X_test, exact=True)
         if p.invalid:
             nmse_test = None
             nmse_test_noiseless = None
@@ -367,7 +383,7 @@ class RegressionTask(HierarchicalTask):
 
             # Feasibility-first: require budget feasibility for success.
             if self.feasibility_first and success:
-                y_hat_train = p.execute(self.X_train)
+                y_hat_train = p.execute(self.X_train, exact=True)
                 budget_status, _ = self._budget_feasibility(p, y_hat_train)
                 if budget_status != "feasible":
                     success = False
@@ -395,6 +411,30 @@ class RegressionTask(HierarchicalTask):
             })
 
         return info
+
+
+def cutoff_scales(X):
+    """Per-column (sd, median of the positive values) of the split X.
+
+    `sd` normalises the smoothed cutoff's steepness, k = alpha / sd, so the
+    transition band is one width in the units of the feature being tested (#25).
+    Standard deviation specifically: MAD is exactly 0 for 18 of the 23 features
+    and IQR for 12, so neither is a well-defined normaliser.  Every feature has
+    strictly positive variance, but a degenerate column would give k = inf, so a
+    zero or non-finite sd falls back to 1.0 -- the flat alpha, which is what the
+    fork applied before F5.
+
+    `median(x > 0)` is the value a threshold constant on that column starts at
+    (#47).  A column with no positive values has none; NaN is the signal
+    Program._const_x0 reads as "start at 1.0".
+    """
+    X = np.asarray(X, dtype=float)
+    sd = np.std(X, axis=0)
+    sd = np.where(np.isfinite(sd) & (sd > 0.0), sd, 1.0)
+    median_pos = np.array([np.median(column[column > 0]) if np.any(column > 0)
+                           else np.nan
+                           for column in X.T])
+    return sd, median_pos
 
 
 def make_regression_metric(name, y_train, *args):

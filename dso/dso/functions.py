@@ -2,6 +2,7 @@
 import re
 import numpy as np
 from fractions import Fraction
+from functools import partial
 
 from dso.library import Token, PlaceholderConstant, HardCodedConstant, Polynomial, StateChecker
 import dso.utils as U
@@ -36,10 +37,54 @@ def harmonic(x1):
     else:
         return GAMMA + np.log(x1) + 0.5/x1 - 1./(12*x1**2) + 1./(120*x1**4)
 
-def _cutoff_smooth(x1, x2):
-    """Smooth approximation of 1[x1 > x2]. Larger CUTOFF_ALPHA = sharper."""
-    return 1 / (1 + np.exp(-(x1 - x2) * CUTOFF_ALPHA))
+def _cutoff_smooth(x1, x2, k=None):
+    """Smooth approximation of 1[x1 > x2] at steepness k (default CUTOFF_ALPHA)."""
+    return 1 / (1 + np.exp(-(x1 - x2) * (CUTOFF_ALPHA if k is None else k)))
 
+def _cutoff_exact(x1, x2):
+    """The cutoff itself: 1[x1 > x2], strict, with no transition band."""
+    return np.greater(x1, x2).astype(np.float64)
+
+
+"""The cutoff's three forms, one name (F4, F5).
+
+`cutoff` is a single token executed under a mode, not a family of tokens: the
+name, the arity and the complexity are the same whichever form is in the
+traversal, so the expression the search emits, the expression that is scored and
+the expression that is reported are the same object with the same printed form
+(ADR 0004).  `Program` swaps the forms in and out by traversal index:
+
+- `exact=True` is the hardened step the reward scores and every reported number
+  is computed on.  No protected twin: `np.greater` has no numerical hazard.
+- the smoothed forms are what constant fitting is differentiated through, at the
+  per-instance steepness `k = CUTOFF_ALPHA / s` of the feature the cutoff tests
+  (#25).  `k=None` keeps the module-level alpha flat, which is what a program
+  built against a task carrying no scale vector falls back to.
+"""
+CUTOFF_TOKEN_NAME = "cutoff"
+
+
+def cutoff_token(k=None, exact=False, protected=False):
+    """Return the `cutoff` Token one call site is executed under.
+
+    The steepness it was built with is readable off the token as `cutoff_k`
+    (None = the exact form, or the module-level alpha applied flat), so a
+    consumer compiling the same traversal elsewhere -- the Gurobi constant
+    optimizer's model builder -- fits through the band the executor uses rather
+    than re-deriving it.
+    """
+    if exact:
+        function = _cutoff_exact
+    else:
+        smooth = _protected_cutoff_smooth if protected else _cutoff_smooth
+        function = smooth if k is None else partial(smooth, k=k)
+    token = Token(function, CUTOFF_TOKEN_NAME, arity=2, complexity=1)
+    token.cutoff_k = None if exact else k
+    return token
+
+
+# Stateless, so one instance serves every hardened traversal.
+EXACT_CUTOFF_TOKEN = cutoff_token(exact=True)
 
 # Annotate unprotected ops
 unprotected_ops = [
@@ -71,7 +116,7 @@ unprotected_ops = [
     Token(n4, "n4", arity=1, complexity=1),
     Token(sigmoid, "sigmoid", arity=1, complexity=1),
     Token(harmonic, "harmonic", arity=1, complexity=1),
-    Token(_cutoff_smooth, "cutoff", arity=2, complexity=1),
+    cutoff_token(),
 ]
 
 
@@ -149,11 +194,11 @@ def protected_sigmoid(x1):
         return np.where(x1 < -100, 0.0,
                np.where(x1 > 100, 1.0, 1 / (1 + np.exp(-x1))))
 
-def _protected_cutoff_smooth(x1, x2):
-    """Smooth approximation of 1[x1 > x2]. Larger CUTOFF_ALPHA = sharper."""
+def _protected_cutoff_smooth(x1, x2, k=None):
+    """Smooth approximation of 1[x1 > x2] at steepness k (default CUTOFF_ALPHA)."""
     # See protected_sigmoid: clip the output to {0,1} in the saturated tails so the
     # overflow tail (x1 << x2) returns 0, not 1.
-    t = (x1 - x2) * CUTOFF_ALPHA
+    t = (x1 - x2) * (CUTOFF_ALPHA if k is None else k)
     with np.errstate(over='ignore'):
         return np.where(t < -100, 0.0,
                np.where(t > 100, 1.0, 1 / (1 + np.exp(-t))))
@@ -174,7 +219,7 @@ protected_ops = [
     Token(protected_n3, "n3", arity=1, complexity=1),
     Token(protected_n4, "n4", arity=1, complexity=1),
     Token(protected_sigmoid, "sigmoid", arity=1, complexity=1),
-    Token(_protected_cutoff_smooth, "cutoff", arity=2, complexity=1),
+    cutoff_token(protected=True),
 ]
 
 # Add unprotected ops to function map
