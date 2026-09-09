@@ -1,9 +1,38 @@
 """Constant optimizer used for deep symbolic optimization."""
 
+import traceback
+import warnings
 from functools import partial
 
 import numpy as np
 from scipy.optimize import minimize
+
+#: The failures `GurobiConstOptimizer.__call__` has already reported, per
+#: process.  It runs once per program, so a systemic fault -- an import that no
+#: longer resolves, an expired licence -- would otherwise speak once per program
+#: for the length of a run.  Reward evaluation is parallelised over processes,
+#: so each one says it once.
+_REPORTED_FAILURES = set()
+
+
+def _report_solve_failure(exception):
+    """Say, once, that a solve failed and its programs are being scored blind.
+
+    The caller scores an unrecoverable failure `budget_status="unknown"` so the
+    RL search continues, which is right for a licence timeout and wrong for a
+    broken import: silence there means a whole run of programs is scored on a
+    verdict no solver ever gave.  Saying so once is what tells the two apart.
+    """
+    signature = (type(exception).__name__, str(exception))
+    if signature in _REPORTED_FAILURES:
+        return
+    _REPORTED_FAILURES.add(signature)
+    warnings.warn(
+        "The Gurobi constant optimiser failed; every program it touches is "
+        "being scored budget_status='unknown'. %s: %s. Said once per process; "
+        "the traceback follows." % signature,
+        RuntimeWarning, stacklevel=3)
+    traceback.print_exc()
 
 
 def _map_gurobi_status(status_code):
@@ -315,9 +344,11 @@ class GurobiConstOptimizer(ConstOptimizer):
                 program.budget_violation = None
                 return x0
 
-        except Exception:
+        except Exception as exception:
             # Catches ImportError, gurobipy.GurobiError, and anything else so
-            # the RL search always continues.
+            # the RL search always continues -- but says so, once, rather than
+            # letting a broken import read as a solver verdict.
+            _report_solve_failure(exception)
             if program is not None:
                 program.hard_status = "error"
                 program.hard_has_solution = False
