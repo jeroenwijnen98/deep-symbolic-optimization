@@ -132,12 +132,16 @@ to the unprotected token when no twin is registered.
 GT_LEVELS = range(5)
 
 
+def _gt(x1, n):
+    """Declared-threshold gate 1[x1 > n]."""
+    return np.greater(x1, n).astype(np.float64)
+
+
 def _make_gt(n):
-    def gt_n(x1):
-        return np.greater(x1, n).astype(np.float64)
-    gt_n.__name__ = "gt{}".format(n)
-    gt_n.__doc__ = "Declared-threshold gate 1[x1 > {}].".format(n)
-    return gt_n
+    # A partial over a module-level function, not a closure: a Program carrying
+    # this token is pickled whenever one crosses a process boundary (the const
+    # optimisation pool, GP's parallel_eval), and a local function cannot be.
+    return partial(_gt, n=n)
 
 
 unprotected_ops.extend(
