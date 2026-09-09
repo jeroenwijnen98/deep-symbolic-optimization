@@ -45,6 +45,12 @@ def make_prior(library, config_prior):
     priors = []
     warn_messages = []
     for prior_type, prior_args in config_prior.items():
+        if prior_type.startswith("_"):
+            # Documentation the config carries beside the setting it explains,
+            # not a prior.  The tax repo writes these (`_note`, from
+            # code/scripts/gen_dsr_config.py) so a reader of the config meets
+            # the reasoning where the constraint is.
+            continue
         if prior_type in prior_dict:
             prior_class = prior_dict[prior_type]
         else:
@@ -56,6 +62,9 @@ def make_prior(library, config_prior):
         for single_prior_args in prior_args:
             # Attempt to build the Prior. Any Prior can fail if it references a
             # Token not in the Library.
+            single_prior_args = {key: value
+                                 for key, value in single_prior_args.items()
+                                 if not key.startswith("_")}
             prior_is_enabled = single_prior_args.pop('on', False)
             if prior_is_enabled:
                 try:
