@@ -75,7 +75,7 @@ class LogEval():
                 "index"],
             "y": [
                 "r",
-                "nmse_test",
+                "nmse_train",
                 "r_avg_test"]
         },
         "pf": {
@@ -91,7 +91,7 @@ class LogEval():
                 "complexity"],
             "y": [
                 "r",
-                "nmse_test"]
+                "nmse_train"]
         }
     }
 

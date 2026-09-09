@@ -26,6 +26,7 @@ class RegressionTask(HierarchicalTask):
                  decision_tree_threshold_set=None,
                  poly_optimizer_params=None,
                  cutoff_alpha=None,
+                 household_aggregation=False, household_ids=None,
                  feasibility_first=False, violation_tau_pct=1.0,
                  budget_slack=0.0):
         """
@@ -93,6 +94,19 @@ class RegressionTask(HierarchicalTask):
 
         poly_optimizer_params : dict
             Parameters for PolyOptimizer if poly token is in the library.
+
+        household_aggregation : bool
+            If True, every metric is computed on household sums of the
+            person-level predictions rather than on the person rows: the
+            expression is evaluated per person, its error assessed per
+            household. Requires household_ids. Defaults to False, which is
+            upstream's behaviour exactly.
+
+        household_ids : str
+            Path to a headerless single-column CSV holding one household id per
+            data row, row-aligned with the dataset. If None and
+            household_aggregation is True, defaults to
+            <dataset stem>_households.csv beside the dataset.
         """
 
         super(HierarchicalTask).__init__()
@@ -103,6 +117,7 @@ class RegressionTask(HierarchicalTask):
         (X, y) data.
         """
         self.X_test = self.y_test = self.y_test_noiseless = None
+        dataset_path = None
 
         # Case 1: Named benchmark dataset (shortcut for Case 2)
         if isinstance(dataset, str) and not dataset.endswith(".csv"):
@@ -134,6 +149,9 @@ class RegressionTask(HierarchicalTask):
             self.X_train = df.values[:, :-1]
             self.y_train = df.values[:, -1]
             self.name = dataset.replace("/", "_")[:-4]
+            # The only case that names a file, and so the only one a household-id
+            # sidecar can be derived from (F7).
+            dataset_path = dataset
 
         # Case 4: sklearn-like (X, y) data
         elif isinstance(dataset, tuple):
@@ -147,9 +165,59 @@ class RegressionTask(HierarchicalTask):
             self.y_test = self.y_train
             self.y_test_noiseless = self.y_test
 
+        """
+        Configure household aggregation (F7).
+
+        The evaluation unit is the household: an expression is evaluated per
+        person, but its error is assessed on the household total, because the
+        tax rules are awarded per household and policy is evaluated there.  The
+        aggregation is a linear group-sum, so it is applied to the reference
+        targets once here and to y_hat at each metric call site -- eight visible
+        edits rather than one invisible wrapper, so the aggregation appears in a
+        traceback.
+
+        The flag defaults to False.  Only the CSV dataset case can name a
+        sidecar, and the benchmark cases (Nguyen-* and friends) have no ids and
+        no path to derive one from, so a True default would break upstream's own
+        suite.  False also keeps the person-level path a branch that is
+        exercised rather than dead code -- which is the ablation switch.
+        """
+        self.household_aggregation = household_aggregation
+        if household_aggregation and household_ids is None:
+            household_ids = default_household_ids_path(dataset_path)
+        assert not household_aggregation or household_ids is not None, (
+            "household_aggregation requires household_ids: the dataset is not a "
+            "CSV path, so the default <dataset stem>_households.csv cannot be "
+            "derived from it.")
+        if household_aggregation:
+            self.household_codes, self.n_households = load_household_codes(
+                household_ids, len(self.X_train))
+            # The row count alone cannot tell a stale sidecar apart from a live
+            # one; the household count can.  10.000 households of size 1 beside
+            # 10.000 rows is what a sidecar from the wrong draw looks like.
+            print("Household aggregation: {} rows -> {} households (ids from {})"
+                  .format(len(self.X_train), self.n_households, household_ids))
+            assert len(self.X_test) == len(self.household_codes), (
+                "household_aggregation has one id vector, which is only enough "
+                "because the CSV case sets X_test = X_train; a genuinely "
+                "separate test split needs its own sidecar.")
+        else:
+            self.household_codes = None
+            self.n_households = None
+
+        # The aggregated reference targets.  Every metric below is built from
+        # these, so the var_y each one closes over is the household variance and
+        # follows for free; var_y_test / var_y_test_noiseless are explicit and
+        # get the same treatment here.  The CSV target itself stays per person:
+        # X is person-level, so a household-level y would give the file
+        # mismatched row counts and break DSO's last-column convention.
+        self.y_train_hh = self._agg(self.y_train)
+        self.y_test_hh = self._agg(self.y_test)
+        self.y_test_noiseless_hh = self._agg(self.y_test_noiseless)
+
         # Save time by only computing data variances once
-        self.var_y_test = np.var(self.y_test)
-        self.var_y_test_noiseless = np.var(self.y_test_noiseless)
+        self.var_y_test = np.var(self.y_test_hh)
+        self.var_y_test_noiseless = np.var(self.y_test_noiseless_hh)
 
         """
         Configure train/test reward metrics.
@@ -159,7 +227,7 @@ class RegressionTask(HierarchicalTask):
             "distance from the metric's optimum (max_reward) allowed for a "
             "success.")
         self.early_stop_threshold = early_stop_threshold
-        self.metric, self.invalid_reward, self.max_reward = make_regression_metric(metric, self.y_train, *metric_params)
+        self.metric, self.invalid_reward, self.max_reward = make_regression_metric(metric, self.y_train_hh, *metric_params)
 
         # If no early-stop metric is given, reuse the training metric and its params.
         if early_stop_metric is None:
@@ -179,10 +247,10 @@ class RegressionTask(HierarchicalTask):
             self.early_stop_max = 0.0
         else:
             self.early_stop_metric_fn, _, self.early_stop_max = make_regression_metric(
-                early_stop_metric, self.y_test_noiseless, *early_stop_metric_params)
+                early_stop_metric, self.y_test_noiseless_hh, *early_stop_metric_params)
         self.extra_metric_test = extra_metric_test
         if extra_metric_test is not None:
-            self.metric_test, _, _ = make_regression_metric(extra_metric_test, self.y_test, *extra_metric_test_params)
+            self.metric_test, _, _ = make_regression_metric(extra_metric_test, self.y_test_hh, *extra_metric_test_params)
         else:
             self.metric_test = None
 
@@ -196,6 +264,9 @@ class RegressionTask(HierarchicalTask):
         if reward_noise > 0:
             assert reward_noise_type in ["y_hat", "r"], "Reward noise type not recognized."
             self.rng = np.random.RandomState(0)
+            # The last person-level quantity in the file.  reward_noise is 0.0 in
+            # config_regression.json and this project never sets it, so the path
+            # is dead; it follows the aggregated target if it is ever enabled.
             y_rms_train = np.sqrt(np.mean(self.y_train ** 2))
             if reward_noise_type == "y_hat":
                 self.scale = reward_noise * y_rms_train
@@ -240,8 +311,12 @@ class RegressionTask(HierarchicalTask):
         else:
             self.violation_tau = None
 
-        # Set neg_nrmse as the metric for const optimization
-        self.const_opt_metric, _, _ = make_regression_metric("neg_nrmse", self.y_train)
+        # Set neg_nrmse as the metric for const optimization.  Aggregated like
+        # the reward: fitting a criterion the reward does not use would optimise
+        # the wrong thing.  The group-sum is linear -- the household residual is
+        # agg(y) - agg(y_hat) -- so the objective stays smooth and L-BFGS-B is
+        # untroubled.
+        self.const_opt_metric, _, _ = make_regression_metric("neg_nrmse", self.y_train_hh)
 
         # Function to optimize polynomial tokens
         if "poly" in self.library.names:
@@ -254,6 +329,23 @@ class RegressionTask(HierarchicalTask):
                     }
 
             self.poly_optimizer = PolyOptimizer(**poly_optimizer_params)
+
+    def _agg(self, v):
+        """Sum person-level values into household totals (F7).
+
+        The identity when household_aggregation is off, so the person-level
+        reward stays one call away and upstream is byte-identical.
+
+        `np.bincount` over codes from `np.unique`, not `np.add.reduceat` over
+        run boundaries: contiguous household blocks are a property of today's
+        generator rather than of the contract, and a reward that is silently
+        wrong under row reordering has no symptom.  `unique` is O(n log n) once
+        at load; `bincount` is O(n) and is the only recurring cost.
+        """
+        if not self.household_aggregation:
+            return v
+        return np.bincount(self.household_codes, weights=v,
+                           minlength=self.n_households)
 
     def _budget_feasibility(self, p, y_hat):
         """Return (status, v) for a program given its predictions.
@@ -272,6 +364,8 @@ class RegressionTask(HierarchicalTask):
             return status, v
 
         # Const optimizer never ran (no constants in program); compute directly.
+        # Deliberately not aggregated: this compares totals, and a total is
+        # invariant to how the rows are grouped (F7).
         shortfall = float(np.sum(self.y_train) - np.sum(y_hat))
         v = max(0.0, shortfall - self.budget_slack)
         tol = 1e-9 * max(1.0, abs(float(np.sum(self.y_train))))
@@ -312,7 +406,7 @@ class RegressionTask(HierarchicalTask):
 
         # Compute and return neg_nrmse for constant optimization
         if optimizing:
-            return self.const_opt_metric(self.y_train, y_hat)
+            return self.const_opt_metric(self.y_train_hh, self._agg(y_hat))
 
         # Feasibility-first reward shaping (Deb's rules).
         # Applied only on the non-optimizing path when enabled.
@@ -324,7 +418,7 @@ class RegressionTask(HierarchicalTask):
                 return 0.5 / (1.0 + v / self.violation_tau)
             else:  # "feasible"
                 # Compute the base metric (r in [0, 1]) and transform.
-                r = self.metric(self.y_train, y_hat)
+                r = self.metric(self.y_train_hh, self._agg(y_hat))
                 # Apply reward noise before transformation if applicable.
                 if self.reward_noise and self.reward_noise_type == "r":
                     if r >= self.max_reward - 1e-5 and p.evaluate.get("success"):
@@ -337,8 +431,9 @@ class RegressionTask(HierarchicalTask):
                         r /= np.sqrt(1 + 12 * self.scale ** 2)
                 return 0.5 + 0.5 * r
 
-        # Compute metric
-        r = self.metric(self.y_train, y_hat)
+        # Compute metric.  This is the household reward: the expression is
+        # evaluated per person and its error assessed per household (F7).
+        r = self.metric(self.y_train_hh, self._agg(y_hat))
 
         # Direct reward noise
         # For reward_noise_type == "r", success can for ~max_reward metrics be
@@ -360,25 +455,35 @@ class RegressionTask(HierarchicalTask):
         # threshold is calibrated against the reward's scale (F4).
         y_hat = p.execute(self.X_test, exact=True)
         if p.invalid:
-            nmse_test = None
-            nmse_test_noiseless = None
+            nmse_train = None
+            nmse_train_noiseless = None
             success = False
 
         else:
-            # NMSE on test data (used to report final error)
-            nmse_test = np.mean((self.y_test - y_hat) ** 2) / self.var_y_test
+            # Aggregated like the reward (F7): the reported error is the one
+            # chapter 5 quotes, and the early-stop metric below is thresholded
+            # against the reward's scale rather than a different one.
+            y_hat_agg = self._agg(y_hat)
 
-            # NMSE on noiseless test data (used to determine recovery)
-            nmse_test_noiseless = np.mean((self.y_test_noiseless - y_hat) ** 2) / self.var_y_test_noiseless
+            # NMSE on the data (used to report final error).  Labelled _train
+            # because that is what it is: DSO's "test" is the second dataset a
+            # task holds, benchmarks ship one and the CSV case does not, so
+            # __init__ above aliases X_test = X_train.  The arithmetic was always
+            # right and the label was false (F8); train, validation and test are
+            # three separate files here, compared post hoc.
+            nmse_train = np.mean((self.y_test_hh - y_hat_agg) ** 2) / self.var_y_test
+
+            # NMSE on noiseless data (used to determine recovery)
+            nmse_train_noiseless = np.mean((self.y_test_noiseless_hh - y_hat_agg) ** 2) / self.var_y_test_noiseless
 
             # Success = candidate within `early_stop_threshold` of the early-stop
             # metric's optimum (max_reward) on noiseless test data, in either
             # direction. "nmse" has optimum 0 and is always >= 0, so this reduces
             # to NMSE <= early_stop_threshold.
             if self.early_stop_metric_fn is None:
-                metric_value = nmse_test_noiseless
+                metric_value = nmse_train_noiseless
             else:
-                metric_value = self.early_stop_metric_fn(self.y_test_noiseless, y_hat)
+                metric_value = self.early_stop_metric_fn(self.y_test_noiseless_hh, y_hat_agg)
             success = abs(metric_value - self.early_stop_max) <= self.early_stop_threshold
 
             # Feasibility-first: require budget feasibility for success.
@@ -389,8 +494,8 @@ class RegressionTask(HierarchicalTask):
                     success = False
 
         info = {
-            "nmse_test" : nmse_test,
-            "nmse_test_noiseless" : nmse_test_noiseless,
+            "nmse_train" : nmse_train,
+            "nmse_train_noiseless" : nmse_train_noiseless,
             "success" : success,
             "budget_shortfall" : p.budget_shortfall,
             "budget_shortfall_pct" : p.budget_shortfall_pct,
@@ -399,18 +504,56 @@ class RegressionTask(HierarchicalTask):
 
         if self.metric_test is not None:
             if p.invalid:
-                m_test = None
-                m_test_noiseless = None
+                m_train = None
+                m_train_noiseless = None
             else:
-                m_test = self.metric_test(self.y_test, y_hat)
-                m_test_noiseless = self.metric_test(self.y_test_noiseless, y_hat)
+                m_train = self.metric_test(self.y_test_hh, y_hat_agg)
+                m_train_noiseless = self.metric_test(self.y_test_noiseless_hh, y_hat_agg)
 
+            # The config key `extra_metric_test` is upstream's public surface and
+            # keeps its name; the emitted column takes the split label the other
+            # two carry (F8), so no metric column in the hall of fame or the
+            # Pareto front is left saying nothing about which rows it is over.
             info.update({
-                self.extra_metric_test : m_test,
-                self.extra_metric_test + '_noiseless' : m_test_noiseless
+                self.extra_metric_test + '_train' : m_train,
+                self.extra_metric_test + '_train_noiseless' : m_train_noiseless
             })
 
         return info
+
+
+def default_household_ids_path(dataset_path):
+    """Return `<dataset stem>_households.csv`, or None when there is no stem.
+
+    D7 emits one sidecar per split beside its matrix, so the default is derivable
+    and the three split files need no config surface kept in sync across them.
+    An explicit `household_ids` is the escape hatch.
+    """
+    if not isinstance(dataset_path, str) or not dataset_path.endswith(".csv"):
+        return None
+    return dataset_path[:-len(".csv")] + "_households.csv"
+
+
+def load_household_codes(path, n_rows):
+    """Read a household-id sidecar and return (codes, n_households).
+
+    `codes` is a dense 0..n_households-1 relabelling of the ids, in
+    `np.unique` order, which is what `np.bincount` needs.  The ids themselves
+    are never used again: they are shifted into a per-split block by D7, so
+    their values carry a draw seed and nothing this file needs.
+    """
+    ids = pd.read_csv(path, header=None).values[:, 0]
+    assert len(ids) == n_rows, (
+        "household id sidecar {!r} has {} rows, the dataset has {}".format(
+            path, len(ids), n_rows))
+    ids = np.asarray(ids, dtype=np.float64)
+    assert np.all(np.isfinite(ids)), (
+        "household id sidecar {!r} holds a non-finite id".format(path))
+    assert np.all(ids == np.floor(ids)), (
+        "household id sidecar {!r} holds a non-integral id".format(path))
+    unique_ids, codes = np.unique(ids, return_inverse=True)
+    codes = np.asarray(codes, dtype=np.intp).ravel()
+    return codes, len(unique_ids)
 
 
 def cutoff_scales(X):

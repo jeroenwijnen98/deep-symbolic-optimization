@@ -40,6 +40,16 @@
       "reward_noise_type" : "r",
       "normalize_variance" : false,
 
+      // Evaluation unit. With household_aggregation true, every metric is
+      // computed on household sums of the person-level predictions: the
+      // expression is evaluated per row, its error assessed per household.
+      // Requires household_ids, a headerless one-column CSV holding one
+      // household id per data row. When household_ids is null it defaults to
+      // <dataset stem>_households.csv beside the dataset. False here because
+      // the benchmark datasets have no ids and no path to derive one from.
+      "household_aggregation" : false,
+      "household_ids" : null,
+
       // Set of thresholds (shared by all input variables) for building
       // decision trees. Note that no StateChecker will be added to Library
       // if decision_tree_threshold_set is an empty list or null.
