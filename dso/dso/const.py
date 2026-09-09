@@ -213,7 +213,7 @@ class GurobiConstOptimizer(ConstOptimizer):
         try:
             # Lazy imports: keeps dso importable without Gurobi / the tax repo.
             from solvers.tax_model import TaxModel
-            from solvers.tree_to_gurobi import classify_tree, build_preds
+            from mip.translate import classify_tree, build_preds
 
             # Initialise elastic attrs; they stay None unless we reach the
             # elastic phase.
