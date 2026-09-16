@@ -13,10 +13,8 @@ import shutil
 from collections import defaultdict
 
 #These functions are defined globally so they are pickleable and can be used by Pool.map
-def hof_work(p):
-    return [p.r, p.on_policy_count, p.off_policy_count, repr(p.sympy_expr), repr(p), p.evaluate]
-
-def pf_work(p):
+def program_work(p):
+    """One hall-of-fame or Pareto-front row: the columns, then the evaluate dict."""
     return [p.complexity, p.r, p.on_policy_count, p.off_policy_count, repr(p.sympy_expr), repr(p), p.evaluate]
 
 
@@ -365,12 +363,12 @@ class StatsLogger():
             hof = [programs[i] for i in i_hof]
 
             if pool is not None:
-                results = pool.map(hof_work, hof)
+                results = pool.map(program_work, hof)
             else:
-                results = list(map(hof_work, hof))
+                results = list(map(program_work, hof))
 
             eval_keys = list(results[0][-1].keys())
-            columns = ["r", "count_on_policy", "count_off_policy", "expression", "traversal"] + eval_keys
+            columns = ["complexity", "r", "count_on_policy", "count_off_policy", "expression", "traversal"] + eval_keys
             hof_results = [result[:-1] + [result[-1][k] for k in eval_keys] for result in results]
             df = pd.DataFrame(hof_results, columns=columns)
             expr_col = df.columns.get_loc("expression")
@@ -402,9 +400,9 @@ class StatsLogger():
             pf.sort(key=lambda p: p.complexity) # Sort by complexity
 
             if pool is not None:
-                results = pool.map(pf_work, pf)
+                results = pool.map(program_work, pf)
             else:
-                results = list(map(pf_work, pf))
+                results = list(map(program_work, pf))
 
             eval_keys = list(results[0][-1].keys())
             columns = ["complexity", "r", "count_on_policy", "count_off_policy", "expression", "traversal"] + eval_keys
