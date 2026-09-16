@@ -34,7 +34,9 @@ class StatsLogger():
             TenorFlow Session object (used for generating summary files)
 
         output_file : str
-            Filename to write results for each iteration.
+            Filename whose stem names the run's log files (``<stem>_hof.csv``
+            and so on). The per-iteration results go to ``training_curve.csv``
+            beside it.
 
         save_summary : bool, optional
             Whether to write TensorFlow summaries.
@@ -135,6 +137,8 @@ class StatsLogger():
         if self.output_file is not None:
             os.makedirs(os.path.dirname(self.output_file), exist_ok=True)
             prefix, _ = os.path.splitext(self.output_file)
+            self.training_curve_file = os.path.join(
+                os.path.dirname(self.output_file), "training_curve.csv")
             self.all_r_output_file = "{}_all_r.npy".format(prefix)
             self.all_info_output_file = "{}_all_info.csv".format(prefix)
             self.hof_output_file = "{}_hof.csv".format(prefix)
@@ -149,7 +153,7 @@ class StatsLogger():
                 os.makedirs(self.expressions_dir, exist_ok=True)
             else:
                 self.expressions_dir = None
-            with open(self.output_file, 'w') as f:
+            with open(self.training_curve_file, 'w') as f:
                 # r_best : Maximum across all iterations so far
                 # r_max : Maximum across this iteration's batch
                 # r_avg_full : Average across this iteration's full batch (before taking epsilon subset)
@@ -527,7 +531,7 @@ class StatsLogger():
         """Write all available buffers to file."""
         if self.output_file is not None:
             self.buffer_iteration_stats = self.flush_buffer(
-                self.buffer_iteration_stats, self.output_file)
+                self.buffer_iteration_stats, self.training_curve_file)
         if self.save_all_iterations:
             self.buffer_all_programs = self.flush_buffer(
                 self.buffer_all_programs, self.all_info_output_file)
