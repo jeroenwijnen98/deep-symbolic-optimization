@@ -171,8 +171,8 @@ class GurobiConstOptimizer(ConstOptimizer):
 
     For trees that are affine in their constants the inner problem is a convex
     LP (absolute_income_loss) or QP (absolute_income_loss_squared) solved fast
-    and globally.  For trees where constants appear nonlinearly, NonConvex=2 is enabled and an optional
-    time_limit (seconds) may be set.
+    and globally.  For trees where constants appear nonlinearly, NonConvex=2 is
+    enabled and an optional time_limit (seconds) may be set.
 
     Budget status contract (written to program after each call with constants):
       program.budget_status   : "feasible" | "infeasible" | "unknown"
@@ -195,7 +195,8 @@ class GurobiConstOptimizer(ConstOptimizer):
     """
 
     def __init__(self, budget_slack=0.0,
-                 loss_function="absolute_income_loss_squared", lower_bound=-1e5, upper_bound=1e5, time_limit=None,
+                 loss_function="absolute_income_loss_squared",
+                 lower_bound=-1e5, upper_bound=1e5, time_limit=None,
                  threads=1, **kwargs):
         super(GurobiConstOptimizer, self).__init__(**kwargs)
         self.budget_slack = budget_slack
