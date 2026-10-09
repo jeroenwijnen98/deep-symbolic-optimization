@@ -170,8 +170,8 @@ class GurobiConstOptimizer(ConstOptimizer):
     expression tree into an algebraic Gurobi model.
 
     For trees that are affine in their constants the inner problem is a convex
-    LP (income_loss) or QP (income_loss_squared) solved fast and globally.  For trees
-    where constants appear nonlinearly, NonConvex=2 is enabled and an optional
+    LP (absolute_income_loss) or QP (absolute_income_loss_squared) solved fast
+    and globally.  For trees where constants appear nonlinearly, NonConvex=2 is enabled and an optional
     time_limit (seconds) may be set.
 
     Budget status contract (written to program after each call with constants):
@@ -194,8 +194,8 @@ class GurobiConstOptimizer(ConstOptimizer):
     "unknown" and x0 is returned so the RL search always continues.
     """
 
-    def __init__(self, budget_slack=0.0, loss_function="income_loss_squared",
-                 lower_bound=-1e5, upper_bound=1e5, time_limit=None,
+    def __init__(self, budget_slack=0.0,
+                 loss_function="absolute_income_loss_squared", lower_bound=-1e5, upper_bound=1e5, time_limit=None,
                  threads=1, **kwargs):
         super(GurobiConstOptimizer, self).__init__(**kwargs)
         self.budget_slack = budget_slack
