@@ -120,7 +120,7 @@ unprotected_ops = [
 ]
 
 
-"""The gt0-gt4 declared-threshold gates (#54).
+"""The gt0-gt4 gates (#54).
 
 gt<n>(x) = 1[x > n], unary: the cutoff's sibling, carrying its threshold as a
 literal in the operator's own name instead of a fitted threshold constant.  The
@@ -133,7 +133,7 @@ GT_LEVELS = range(5)
 
 
 def _gt(x1, n):
-    """Declared-threshold gate 1[x1 > n]."""
+    """Gate 1[x1 > n]."""
     return np.greater(x1, n).astype(np.float64)
 
 
