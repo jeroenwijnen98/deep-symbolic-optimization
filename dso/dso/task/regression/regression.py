@@ -495,6 +495,8 @@ class RegressionTask(HierarchicalTask):
 
         info = {
             "nmse_train" : nmse_train,
+            # R^2 on the same household-level rows: NMSE divides by var(y).
+            "r2_train" : None if nmse_train is None else 1.0 - nmse_train,
             "nmse_train_noiseless" : nmse_train_noiseless,
             "success" : success,
             "budget_shortfall" : p.budget_shortfall,

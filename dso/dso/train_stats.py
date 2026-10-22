@@ -151,6 +151,7 @@ class StatsLogger():
                 self.expressions_dir = None
             with open(self.training_curve_file, 'w') as f:
                 # r_best : Maximum across all iterations so far
+                # r2_best : R^2 of the program behind r_best (nan if the task reports none)
                 # r_max : Maximum across this iteration's batch
                 # r_avg_full : Average across this iteration's full batch (before taking epsilon subset)
                 # r_avg_sub : Average across this iteration's epsilon-subset batch
@@ -161,6 +162,7 @@ class StatsLogger():
                 # baseline: Baseline value used for training
                 # time: time used to learn in this iteration (in seconds)
                 headers = ["r_best",
+                           "r2_best",
                            "r_max",
                            "r_avg_full",
                            "r_avg_sub",
@@ -218,7 +220,7 @@ class StatsLogger():
             self.summary_writer = None
 
     def save_stats(self, r_full, l_full, actions_full, s_full, invalid_full, r,
-                   l, actions, s, s_history, invalid, r_best, r_max, ewma,
+                   l, actions, s, s_history, invalid, r_best, r2_best, r_max, ewma,
                    summaries, iteration, baseline, iteration_walltime, nevals,
                    programs, positional_entropy, top_samples_per_batch):
 
@@ -237,6 +239,7 @@ class StatsLogger():
         :param s_history: String representation of programs in cache excluding s_full
         :param invalid: invalid_full excluding the ones where keep=false
         :param r_best: reward from the all time best program so far
+        :param r2_best: R^2 of that program, or None if the task reports none
         :param r_max: reward from the best program in this iteration
         :param ewma: Exponentially Weighted Moving Average weight that might be used for baseline computation
         :param summaries: Sumarries returned by the Controller this step
@@ -266,6 +269,7 @@ class StatsLogger():
             invalid_avg_sub = np.mean(invalid)
             stats = np.array([[
                 r_best,
+                np.nan if r2_best is None else r2_best,
                 r_max,
                 r_avg_full,
                 r_avg_sub,

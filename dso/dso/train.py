@@ -481,10 +481,16 @@ class Trainer():
                 print("\n\t** New best")
                 self.p_r_best.print_stats()
 
+        # The best program's R^2, if the task reports one; `evaluate` is cached,
+        # so this costs one evaluation per new best.
+        r2_best = None
+        if self.p_r_best is not None:
+            r2_best = self.p_r_best.evaluate.get("r2_train")
+
         # Collect sub-batch statistics and write output
         self.logger.save_stats(r_full, l_full, actions_full, s_full,
                                invalid_full, r, l, actions, s, s_history,
-                               invalid, self.r_best, r_max, ewma, summaries,
+                               invalid, self.r_best, r2_best, r_max, ewma, summaries,
                                self.iteration, b, iteration_walltime,
                                self.nevals, controller_programs,
                                positional_entropy, top_samples_per_batch)
