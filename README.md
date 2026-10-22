@@ -253,8 +253,8 @@ model.predict(2 * X)
 Each run of DSO saves a timestamped log directory in `config["training"]["logdir"]`. Inside this directory is:
 * `dso_ExperimentName_0.csv`: This file contains batch-wise summary statistics for each epoch. The suffix `_0` means the random number seed was 0. (See "Advanced usage" for batch runs with multiple seeds.)
 * `dso_ExperimnetName_0_summary.csv`: This file contains summary statistics for the entire training run.
-* `dso_ExperimnetName_0_hof.csv`: This file contains statistics of the "hall of fame" (best sequences discovered during training). Edit `config["training"]["hof"] to set the number of hall-of-famers to record.
-* `dso_ExperimnetName_0_pf.csv`: This file contains statistics of the Pareto front of sequences discovered during training. This is a reward-complexity front.
+* `hof.csv`: This file contains statistics of the "hall of fame" (best sequences discovered during training). Edit `config["training"]["hof"] to set the number of hall-of-famers to record.
+* `pf.csv`: This file contains statistics of the Pareto front of sequences discovered during training. This is a reward-complexity front.
 * `config.json`: This is a "dense" version of the configuration used for your run. It explicitly includes all parameters.
 
 # Advanced usage

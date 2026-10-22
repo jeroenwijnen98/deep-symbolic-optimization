@@ -5,7 +5,6 @@ warnings.filterwarnings('ignore', category=DeprecationWarning)
 warnings.filterwarnings('ignore', category=FutureWarning)
 
 from pkg_resources import resource_filename
-import re
 import glob
 import os
 
@@ -155,12 +154,10 @@ class LogEval():
 
         log_dfs = []
 
-        # Get files that match regexp
-        task_name = self.config["experiment"]["task_name"]
-        r = re.compile(r"dso_{}_\d+_{}.csv".format(task_name, log_type))
-        files = filter(r.match, os.listdir(self.save_path))
-        files = [os.path.join(self.save_path, f) for f in files]
-        seeds = [int(f.split("_")[-2]) for f in files]
+        # One seed per run directory, so one file
+        path = os.path.join(self.save_path, "{}.csv".format(log_type))
+        files = [path] if os.path.isfile(path) else []
+        seeds = [self.config["experiment"]["seed"]] * len(files)
 
         if len(files) == 0:
             self.warnings.append("No data for {}!".format(log_type))

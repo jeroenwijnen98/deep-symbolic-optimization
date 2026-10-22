@@ -32,9 +32,9 @@ class StatsLogger():
             TenorFlow Session object (used for generating summary files)
 
         output_file : str
-            Filename whose stem names the run's log files (``<stem>_hof.csv``
-            and so on). The per-iteration results go to ``training_curve.csv``
-            beside it.
+            A file in the run directory; the run's log files (``hof.csv``,
+            ``training_curve.csv`` and so on) go beside it. One seed per
+            directory: a second seed in the same one overwrites them.
 
         save_summary : bool, optional
             Whether to write TensorFlow summaries.
@@ -134,20 +134,18 @@ class StatsLogger():
         """
         if self.output_file is not None:
             os.makedirs(os.path.dirname(self.output_file), exist_ok=True)
-            prefix, _ = os.path.splitext(self.output_file)
-            self.training_curve_file = os.path.join(
-                os.path.dirname(self.output_file), "training_curve.csv")
-            self.all_r_output_file = "{}_all_r.npy".format(prefix)
-            self.all_info_output_file = "{}_all_info.csv".format(prefix)
-            self.hof_output_file = "{}_hof.csv".format(prefix)
-            self.pf_output_file = "{}_pf.csv".format(prefix)
-            self.positional_entropy_output_file = "{}_positional_entropy.npy".format(prefix)
-            self.top_samples_per_batch_output_file = "{}_top_samples_per_batch.csv".format(prefix)
-            self.cache_output_file = "{}_cache.csv".format(prefix)
-            self.token_counter_output_file = "{}_token_count.csv".format(prefix)
+            run_dir = os.path.dirname(self.output_file)
+            self.training_curve_file = os.path.join(run_dir, "training_curve.csv")
+            self.all_r_output_file = os.path.join(run_dir, "all_r.npy")
+            self.all_info_output_file = os.path.join(run_dir, "all_info.csv")
+            self.hof_output_file = os.path.join(run_dir, "hof.csv")
+            self.pf_output_file = os.path.join(run_dir, "pf.csv")
+            self.positional_entropy_output_file = os.path.join(run_dir, "positional_entropy.npy")
+            self.top_samples_per_batch_output_file = os.path.join(run_dir, "top_samples_per_batch.csv")
+            self.cache_output_file = os.path.join(run_dir, "cache.csv")
+            self.token_counter_output_file = os.path.join(run_dir, "token_count.csv")
             if self.save_expressions:
-                self.expressions_dir = os.path.join(
-                    os.path.dirname(self.output_file), "expressions")
+                self.expressions_dir = os.path.join(run_dir, "expressions")
                 os.makedirs(self.expressions_dir, exist_ok=True)
             else:
                 self.expressions_dir = None
