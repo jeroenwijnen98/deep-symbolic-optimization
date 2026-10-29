@@ -242,7 +242,7 @@ class GurobiConstOptimizer(ConstOptimizer):
 
         try:
             # Lazy imports: keeps dso importable without Gurobi / the tax repo.
-            from solvers.tax_model import TaxModel
+            from mip.tax_model import TaxModel
             from mip.translate import classify_tree, build_preds
 
             # Initialise elastic attrs; they stay None unless we reach the
@@ -264,7 +264,7 @@ class GurobiConstOptimizer(ConstOptimizer):
             # ----------------------------------------------------------------
             # Rule 2: build and solve the HARD-constrained model.
             # ----------------------------------------------------------------
-            tm = TaxModel("gurobipy")
+            tm = TaxModel()
             m = tm.solver
             m.Params.OutputFlag = 0
             m.Params.Threads = self.threads
@@ -305,7 +305,7 @@ class GurobiConstOptimizer(ConstOptimizer):
             # ----------------------------------------------------------------
             # Rule 4: no incumbent from hard solve → run ELASTIC solve.
             # ----------------------------------------------------------------
-            tm2 = TaxModel("gurobipy")
+            tm2 = TaxModel()
             m2 = tm2.solver
             m2.Params.OutputFlag = 0
             m2.Params.Threads = self.threads
