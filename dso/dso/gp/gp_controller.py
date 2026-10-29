@@ -32,8 +32,8 @@ class GPController:
                  crossover_operator='cxOnePoint', p_crossover=0.5,
                  mutation_operator='multi_mutate', p_mutate=0.5, 
                  tournament_size=5, mutate_tree_max=3, train_n=50,
-                 parallel_eval=False, ind_representation='', verbose=False,
-                 **kwargs):
+                 parallel_eval=False, ind_representation='', eval_tree=False,
+                 eval_seeds=False, verbose=False, **kwargs):
         """
         Parameters
         ----------
@@ -79,6 +79,20 @@ class GPController:
                 'mod_diff': mod'ed difference from master sequence, or
                 '': original representation (same as used by RL agent)
 
+        eval_tree : bool
+            Compute rewards from the tree that crossover and mutation edit, as
+            the NeurIPS 2021 release did? Off reproduces the uDSR release, in
+            which those edits are never evaluated: each offspring scores as
+            the seed it descends from, so GP only resamples its seeds.
+
+        eval_seeds : bool
+            Evaluate the seeds and offer them to the hall of fame before the
+            first generation? Off, the first tournament compares unevaluated
+            seeds, so it picks at random, and a seed reaches the hall of fame
+            only by surviving to the end of the first generation. The seeds
+            are the RL batch, already charged to the budget, so this adds no
+            evaluations to nevals.
+
         verbose : bool
             Whether to print GP diagnostics.
         """
@@ -97,6 +111,8 @@ class GPController:
         self.nevals = 0
         self.total_nevals = 0
         self.ind_representation = ind_representation
+        self.eval_tree = eval_tree
+        self.eval_seeds = eval_seeds
 
         assert crossover_operator in crossover_ops_dict.keys(), \
                  'Crossover operator should be one of the following: ' \
@@ -261,9 +277,15 @@ class GPController:
             individuals.append(self.creator.Individual(actions[idx], self.pset,
                                                        self.max_mutations,
                                                        self.ind_representation,
-                                                       self.master_sequence))
+                                                       self.master_sequence,
+                                                       self.eval_tree))
 
         self.algorithm.set_population(individuals)
+
+        if self.eval_seeds:
+            self.algorithm._eval(individuals)
+            if self.hof is not None:
+                self.hof.update(individuals)
 
         # Run GP generations
         self.nevals = 0

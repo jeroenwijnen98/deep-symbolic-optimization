@@ -142,6 +142,13 @@
       "tournament_size" : 5,
       "train_n" : 50,
       "mutate_tree_max" : 3,
+      // Evaluate the tree that crossover and mutation edit (NeurIPS 2021
+      // release). False reproduces the uDSR release, where those edits are
+      // never evaluated. See GPController.
+      "eval_tree" : false,
+      // Evaluate the seeds and offer them to the hall of fame before the
+      // first generation.
+      "eval_seeds" : false,
       // Speeds up processing when doing expensive evaluations.
       "parallel_eval" : false
    },

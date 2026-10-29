@@ -22,10 +22,16 @@ class Individual(gp.PrimitiveTree):
         It can incorporate more information for future tasks. """
 
     def __init__(self, actions, pset, max_mutations,
-                 ind_representation, master_sequence):
+                 ind_representation, master_sequence, eval_tree=False):
         super().__init__(tokens_to_DEAP(actions, pset))
 
         self.ind_representation = ind_representation
+        # eval_tree: compute rewards from the tree that crossover and mutation
+        # edit, as the NeurIPS 2021 release did. Off reproduces the uDSR
+        # release, where only the binding operators edit work_repr, so the
+        # regression operators' edits are never evaluated and are undone by
+        # every copy (__deepcopy__ rebuilds the tree from tokenized_repr).
+        self.eval_tree = eval_tree
         self.master_sequence = master_sequence
         # work_repr is likely to be in a different representation
         # then it cannot be "linked" to the same 'actions' object
@@ -40,7 +46,7 @@ class Individual(gp.PrimitiveTree):
         """ Override gp.PrimitiveTree's deepcopy. """
         new = Individual(self.tokenized_repr, self.pset,
                          self.max_mutations, self.ind_representation,
-                         self.master_sequence)
+                         self.master_sequence, self.eval_tree)
         for k, v in self.__dict__.items():
             setattr(new, k, copy.deepcopy(v, memo))
         new.update_tree_repr()
@@ -50,6 +56,8 @@ class Individual(gp.PrimitiveTree):
     def tokenized_repr(self):
         """ Convert to the representation that one can 
             compute rewards from. """
+        if self.eval_tree:
+            return DEAP_to_tokens(self)
         token_repr = self.work_repr.copy()
 
         return token_repr
