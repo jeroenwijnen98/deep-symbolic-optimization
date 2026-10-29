@@ -48,7 +48,7 @@ def make_prior(library, config_prior):
         if prior_type.startswith("_"):
             # Documentation the config carries beside the setting it explains,
             # not a prior.  The tax repo writes these (`_note`, from
-            # code/scripts/gen_dsr_config.py) so a reader of the config meets
+            # code/tools/gen_dsr_config.py) so a reader of the config meets
             # the reasoning where the constraint is.
             continue
         if prior_type in prior_dict:
